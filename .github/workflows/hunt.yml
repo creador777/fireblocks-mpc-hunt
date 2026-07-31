@@ -1,0 +1,229 @@
+name: fireblocks-mpc-hunt
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      shard_count:
+        description: Canary wave size
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "5"
+          - "15"
+          - "25"
+      budget_seconds:
+        description: Per-shard runtime
+        required: true
+        default: "300"
+        type: choice
+        options:
+          - "300"
+          - "3600"
+          - "20700"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fireblocks-mpc-hunt
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.FIREBLOCKS_HUNT_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      seconds: ${{ steps.plan.outputs.seconds }}
+    steps:
+      - name: Build a closed wave plan
+        id: plan
+        env:
+          REQUESTED_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.shard_count || vars.FIREBLOCKS_SHARD_COUNT }}
+          REQUESTED_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.budget_seconds || vars.FIREBLOCKS_BUDGET_SECONDS }}
+        run: |
+          set -euo pipefail
+          case "${REQUESTED_COUNT}" in
+            1)  matrix='[0]' ;;
+            5)  matrix='[0,1,2,3,4]' ;;
+            15) matrix='[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14]' ;;
+            25) matrix='[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]' ;;
+            *) exit 64 ;;
+          esac
+          case "${REQUESTED_SECONDS}" in
+            300|3600|20700) ;;
+            *) exit 64 ;;
+          esac
+          {
+            printf 'count=%s\n' "${REQUESTED_COUNT}"
+            printf 'matrix=%s\n' "${matrix}"
+            printf 'seconds=%s\n' "${REQUESTED_SECONDS}"
+          } >> "${GITHUB_OUTPUT}"
+
+  hunt:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.count) }}
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout public hunt without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: hunt
+
+      - name: Checkout pinned upstream without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: fireblocks/mpc-lib
+          ref: 00ae08b7f1bdbb887aedece384aca2f942aae432
+          persist-credentials: false
+          path: upstream
+
+      - name: Require separate private read and write credentials
+        env:
+          READ_TOKEN: ${{ secrets.FIREBLOCKS_BRAIN_READ_TOKEN }}
+          WRITE_TOKEN: ${{ secrets.FIREBLOCKS_BRAIN_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${READ_TOKEN}"
+          test -n "${WRITE_TOKEN}"
+          test "${READ_TOKEN}" != "${WRITE_TOKEN}"
+
+      - name: Checkout private brain read-only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: creador777/fireblocks-mpc-brain
+          ref: corpus-pool
+          token: ${{ secrets.FIREBLOCKS_BRAIN_READ_TOKEN }}
+          persist-credentials: false
+          path: brain
+
+      - name: Build fuzzer from pinned source
+        working-directory: hunt
+        env:
+          FIREBLOCKS_UPSTREAM_DIR: ${{ github.workspace }}/upstream
+        run: bash scripts/build_fuzzer_image.sh "fireblocks-mpc-hunt:${GITHUB_RUN_ID}-${{ matrix.shard }}"
+
+      - name: Materialize private corpus under strict allowlist
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          mkdir -p "${root}/corpus" "${root}/output" "${root}/state" "${root}/upload"
+          python3 scripts/materialize_corpus.py \
+            "${root}/corpus" \
+            "${GITHUB_WORKSPACE}/brain/corpus/cmp_ecdsa_online" \
+            "${GITHUB_WORKSPACE}/hunt/seeds/cmp_ecdsa_online/corpus"
+
+      - name: Execute isolated shard
+        id: fuzz
+        continue-on-error: true
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+          BUDGET_SECONDS: ${{ needs.plan.outputs.seconds }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          bash scripts/run_fuzzer_shard.sh \
+            "fireblocks-mpc-hunt:${GITHUB_RUN_ID}-${SHARD}" \
+            "${SHARD}" "${BUDGET_SECONDS}" "${root}/corpus" "${root}/output"
+
+      - name: Construct seven-field summary privately
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          python3 scripts/public_summary.py \
+            "${root}/output/private_plain" cmp_ecdsa_online "${SHARD}" \
+            "${root}/state/summary.public"
+
+      - name: Encrypt evidence and verify plaintext cleanup
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          bundle="${root}/upload/incident-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SHARD}.gpg"
+          python3 scripts/package_incident.py \
+            "${root}/output/private_plain" \
+            keys/artifact-recipient.asc \
+            keys/artifact-recipient.fingerprint \
+            "${bundle}"
+          test ! -e "${root}/output/private_plain"
+          test -s "${bundle}"
+          test "$(find "${root}/upload" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 1
+
+      - name: Upload encrypted bundle only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/fireblocks-${{ matrix.shard }}/upload/incident-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}.gpg
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 7
+
+      - name: Publish corpus and encrypted incident to a unique private branch
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+          FIREBLOCKS_BRAIN_WRITE_TOKEN: ${{ secrets.FIREBLOCKS_BRAIN_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          bash scripts/publish_ingest.sh \
+            "${root}/corpus" \
+            "${root}/upload/incident-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SHARD}.gpg" \
+            "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" "${SHARD}"
+
+      - name: Emit only the seven-field public summary
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: python3 scripts/emit_summary.py "${RUNNER_TEMP}/fireblocks-${SHARD}/state/summary.public"
+
+      - name: Preserve finding/tool failure status
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: python3 scripts/enforce_summary_status.py "${RUNNER_TEMP}/fireblocks-${SHARD}/state/summary.public"
+
+  aggregate:
+    if: ${{ always() && needs.plan.result == 'success' }}
+    needs:
+      - plan
+      - hunt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout public collector without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: hunt
+
+      - name: Aggregate the exact private ingest set
+        working-directory: hunt
+        env:
+          FIREBLOCKS_BRAIN_WRITE_TOKEN: ${{ secrets.FIREBLOCKS_BRAIN_WRITE_TOKEN }}
+        run: bash scripts/aggregate_ingest.sh "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" "${{ needs.plan.outputs.count }}"

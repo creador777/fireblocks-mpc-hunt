@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+FROM ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a AS builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates clang cmake git libssl-dev uuid-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=upstream . /src/upstream
+COPY . /src/hunt
+
+RUN cmake -S /src/hunt -B /build \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DCMAKE_C_COMPILER=clang \
+      -DCMAKE_CXX_COMPILER=clang++ \
+      -DOPUS_UPSTREAM_DIR=/src/upstream \
+ && cmake --build /build --parallel "$(nproc)"
+
+RUN mkdir -p /opt/fireblocks/bin /opt/fireblocks/lib /opt/fireblocks/data \
+ && /build/harness/cmp_ecdsa_online/mk_snapshot \
+      /opt/fireblocks/data/snapshot.bin 1 1 2 \
+ && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      /build/harness/cmp_ecdsa_online/opus_selftest \
+      /opt/fireblocks/data/snapshot.bin \
+ && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      /build/harness/cmp_ecdsa_online/opus_cmp_smoke \
+      /opt/fireblocks/data/snapshot.bin \
+ && cp /build/opus_cmp_fuzzer /opt/fireblocks/bin/ \
+ && COSIGNER="$(find /build -name 'libcosigner.so' -type f -print -quit)" \
+ && test -n "$COSIGNER" \
+ && cp "$COSIGNER" /opt/fireblocks/lib/libcosigner.so \
+ && ldd /opt/fireblocks/bin/opus_cmp_fuzzer \
+ && ! ldd /opt/fireblocks/bin/opus_cmp_fuzzer | grep -q 'not found'
+
+FROM ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libgcc-s1 libssl1.1 libstdc++6 libuuid1 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/fireblocks /opt/fireblocks
+
+ENV FIREBLOCKS_SNAPSHOT=/opt/fireblocks/data/snapshot.bin
+ENV LD_LIBRARY_PATH=/opt/fireblocks/lib
+
+LABEL org.opencontainers.image.source="https://github.com/creador777/fireblocks-mpc-hunt"
+LABEL org.opencontainers.image.description="Deterministic CMP ECDSA fuzzing harness"
+
+ENTRYPOINT ["/opt/fireblocks/bin/opus_cmp_fuzzer"]

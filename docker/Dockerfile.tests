@@ -1,0 +1,10 @@
+FROM ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git gnupg python3 python3-yaml \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONDONTWRITEBYTECODE=1
+WORKDIR /work
+ENTRYPOINT ["python3", "-m", "unittest", "-v", "tests.test_security_boundary"]

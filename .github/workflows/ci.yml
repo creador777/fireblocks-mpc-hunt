@@ -1,0 +1,128 @@
+name: defensive-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: defensive-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout hunt without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: hunt
+
+      - name: Checkout pinned upstream without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: fireblocks/mpc-lib
+          ref: 00ae08b7f1bdbb887aedece384aca2f942aae432
+          persist-credentials: false
+          path: upstream
+
+      - name: Bash and Python syntax
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh tests/*.sh
+          python3 -m py_compile scripts/*.py tests/*.py
+
+      - name: Build Linux security-test image
+        working-directory: hunt
+        run: docker build -f docker/Dockerfile.tests -t fireblocks-mpc-hunt-tests:ci .
+
+      - name: Public-boundary and workflow-policy tests without network
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --memory 1g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            fireblocks-mpc-hunt-tests:ci
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --memory 1g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --entrypoint python3 \
+            fireblocks-mpc-hunt-tests:ci \
+            -m unittest -v tests.test_workflow_policy
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 32 \
+            --memory 256m \
+            --cpus 1 \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --entrypoint python3 \
+            fireblocks-mpc-hunt-tests:ci \
+            -c "import pathlib,yaml; [yaml.safe_load(pathlib.Path(p).read_text()) for p in ['/work/.github/workflows/ci.yml','/work/.github/workflows/hunt.yml']]; print('YAML_PARSE_PASS files=2')"
+
+      - name: Runner fail-closed tests without network
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --memory 512m \
+            --cpus 1 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m \
+            --tmpfs /exec:rw,nosuid,nodev,exec,size=4m \
+            --env FAKE_EXEC_ROOT=/exec/bin \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --entrypoint bash \
+            fireblocks-mpc-hunt-tests:ci \
+            /work/tests/test_runner.sh /work/scripts/run_fuzzer_shard.sh
+
+      - name: Private publisher tests against a local bare remote
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 1g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --tmpfs /lab:rw,nosuid,nodev,exec,size=256m \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --entrypoint bash \
+            fireblocks-mpc-hunt-tests:ci \
+            /work/tests/test_private_publish.sh
+
+      - name: Build pinned fuzzer and run synthetic smoke
+        working-directory: hunt
+        run: bash scripts/local_build_and_smoke.sh "${GITHUB_WORKSPACE}/upstream" fireblocks-mpc-hunt:ci

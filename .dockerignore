@@ -1,0 +1,12 @@
+.git
+.github
+build
+out
+private
+staging
+*.raw.log
+*.gpg
+*.tar
+*.tar.gz
+**/__pycache__
+**/*.pyc

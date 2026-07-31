@@ -1,0 +1,13 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+CMakeLists.txt text eol=lf
+Dockerfile* text eol=lf
+keys/*.asc text eol=lf
+keys/*.fingerprint text eol=lf
+seeds/** -text
