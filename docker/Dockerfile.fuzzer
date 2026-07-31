@@ -32,8 +32,9 @@ RUN mkdir -p /opt/fireblocks/bin /opt/fireblocks/lib /opt/fireblocks/data \
  && COSIGNER="$(find /build -name 'libcosigner.so' -type f -print -quit)" \
  && test -n "$COSIGNER" \
  && cp "$COSIGNER" /opt/fireblocks/lib/libcosigner.so \
- && ldd /opt/fireblocks/bin/opus_cmp_fuzzer \
- && ! ldd /opt/fireblocks/bin/opus_cmp_fuzzer | grep -q 'not found'
+ && ldd /opt/fireblocks/bin/opus_cmp_fuzzer > /tmp/opus_cmp_fuzzer.ldd \
+ && ! grep -q 'not found' /tmp/opus_cmp_fuzzer.ldd \
+ && rm -f /tmp/opus_cmp_fuzzer.ldd
 
 FROM ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a
 

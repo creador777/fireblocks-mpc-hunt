@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HUNT = (ROOT / ".github" / "workflows" / "hunt.yml").read_text(encoding="utf-8")
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 RUNNER = (ROOT / "scripts" / "run_fuzzer_shard.sh").read_text(encoding="utf-8")
+DOCKERFILE = (ROOT / "docker" / "Dockerfile.fuzzer").read_text(encoding="utf-8")
 FUZZER = (ROOT / "harness" / "cmp_ecdsa_online" / "src" / "fuzzer.cpp").read_text(
     encoding="utf-8"
 )
@@ -101,6 +102,17 @@ class WorkflowPolicyTests(unittest.TestCase):
             self.assertNotIn(b"c:\\users\\victor", data, str(path))
             self.assertNotIn(b"github_pat_", data, str(path))
             self.assertNotIn(b"ghp_", data, str(path))
+
+    def test_11_linkage_check_never_prints_load_addresses(self) -> None:
+        linkage_lines = [
+            line
+            for line in DOCKERFILE.splitlines()
+            if "ldd /opt/fireblocks/bin/opus_cmp_fuzzer" in line
+        ]
+        self.assertEqual(len(linkage_lines), 1)
+        self.assertIn("> /tmp/opus_cmp_fuzzer.ldd", linkage_lines[0])
+        self.assertIn("grep -q 'not found' /tmp/opus_cmp_fuzzer.ldd", DOCKERFILE)
+        self.assertIn("rm -f /tmp/opus_cmp_fuzzer.ldd", DOCKERFILE)
 
 
 if __name__ == "__main__":
