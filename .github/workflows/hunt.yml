@@ -56,12 +56,52 @@ jobs:
       seconds: ${{ steps.plan.outputs.seconds }}
       workers: ${{ steps.plan.outputs.workers }}
       profile: ${{ steps.plan.outputs.profile }}
+      brain_sha: ${{ steps.brain_revision.outputs.sha }}
     steps:
       - name: Checkout wave planner without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
           path: hunt
+
+      - name: Reject full workflow reruns that could repin the brain
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "${RUN_ATTEMPT}" =~ ^[0-9]+$ ]]
+          if ! (( RUN_ATTEMPT == 1 )); then
+            printf '%s\n' \
+              'status=fail_closed code=full_rerun_requires_new_wave' >&2
+            exit 64
+          fi
+
+      - name: Require private brain read credential in plan
+        env:
+          READ_TOKEN: ${{ secrets.FIREBLOCKS_BRAIN_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${READ_TOKEN}"
+
+      - name: Checkout private brain revision for the wave
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: creador777/fireblocks-mpc-brain
+          ref: corpus-pool
+          token: ${{ secrets.FIREBLOCKS_BRAIN_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: brain-plan
+
+      - name: Resolve one exact private brain revision
+        id: brain_revision
+        working-directory: brain-plan
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git cat-file -t "${sha}")" = commit
+          printf 'sha=%s\n' "${sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Build a closed wave plan
         id: plan
@@ -111,11 +151,11 @@ jobs:
           test -n "${WRITE_TOKEN}"
           test "${READ_TOKEN}" != "${WRITE_TOKEN}"
 
-      - name: Checkout private brain read-only
+      - name: Checkout pinned private brain read-only
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: creador777/fireblocks-mpc-brain
-          ref: corpus-pool
+          ref: ${{ needs.plan.outputs.brain_sha }}
           token: ${{ secrets.FIREBLOCKS_BRAIN_READ_TOKEN }}
           persist-credentials: false
           path: brain
@@ -126,18 +166,32 @@ jobs:
           FIREBLOCKS_UPSTREAM_DIR: ${{ github.workspace }}/upstream
         run: bash scripts/build_fuzzer_image.sh "fireblocks-mpc-hunt:${GITHUB_RUN_ID}-${{ matrix.shard }}"
 
-      - name: Materialize private corpus under strict allowlist
+      - name: Materialize deterministic 24-unit corpus window privately
         working-directory: hunt
         env:
           SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
-          mkdir -p "${root}/corpus" "${root}/output" "${root}/state" "${root}/upload"
-          python3 scripts/materialize_corpus.py \
+          mkdir -p "${root}/corpus" "${root}/output/private_plain" \
+            "${root}/state" "${root}/upload"
+          if python3 scripts/materialize_window.py \
             "${root}/corpus" \
+            "${SHARD}" \
+            "${{ needs.plan.outputs.count }}" \
+            "${GITHUB_RUN_NUMBER}" \
+            "${GITHUB_WORKSPACE}/hunt/seeds/cmp_ecdsa_online/corpus" \
             "${GITHUB_WORKSPACE}/brain/corpus/cmp_ecdsa_online" \
-            "${GITHUB_WORKSPACE}/hunt/seeds/cmp_ecdsa_online/corpus"
+            >"${root}/output/private_plain/materialize.log" 2>&1
+          then
+            rm -f -- "${root}/output/private_plain/materialize.log"
+            rmdir -- "${root}/output/private_plain"
+          else
+            exit 1
+          fi
+          test ! -e "${root}/output/private_plain"
+          total="$(find "${root}/corpus" -mindepth 1 -maxdepth 1 -type f | wc -l)"
+          (( total >= 1 && total <= 24 ))
 
       - name: Execute isolated shard
         id: fuzz
