@@ -21,6 +21,24 @@ class PackageError(RuntimeError):
     pass
 
 
+def gpg_path(path: Path) -> str:
+    """Return a path form accepted by the active GPG runtime.
+
+    Git for Windows ships an MSYS2 GPG. When it is launched by native
+    Windows Python, native ``C:\\...`` values reach gpg-agent unchanged and
+    agent startup fails. Use the MSYS drive form for GPG arguments only;
+    Python keeps native paths for all validation and cleanup operations.
+    """
+    resolved = str(path.resolve(strict=False))
+    if os.name != "nt":
+        return resolved
+    match = re.fullmatch(r"([A-Za-z]):[\\/](.*)", resolved)
+    if match is None:
+        raise PackageError("unsupported Windows GPG path")
+    tail = match.group(2).replace("\\", "/")
+    return f"/{match.group(1).lower()}/{tail}"
+
+
 def run_gpg(args: list[str], *, data: bytes | None = None) -> bytes:
     result = subprocess.run(
         args,
@@ -91,10 +109,13 @@ def package(
     if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
         raise PackageError("invalid destination")
 
-    with tempfile.TemporaryDirectory(prefix=".gpg-home-", dir=destination.parent) as home_text:
+    # The agent socket has a short path limit. The home contains only the
+    # imported public key, so an isolated system-temp directory is both safe
+    # and substantially shorter than a nested run directory on Windows.
+    with tempfile.TemporaryDirectory(prefix="fbgpg-") as home_text:
         home = Path(home_text)
         home.chmod(0o700)
-        base = ["gpg", "--homedir", str(home), "--batch", "--no-tty"]
+        base = ["gpg", "--homedir", gpg_path(home), "--batch", "--no-tty"]
         run_gpg(base + ["--import-options", "import-minimal", "--import"], data=key_data)
         listing = run_gpg(base + ["--with-colons", "--fingerprint", fingerprint])
         imported = {
@@ -116,7 +137,7 @@ def package(
                 "--recipient",
                 fingerprint,
                 "--output",
-                str(partial),
+                gpg_path(partial),
                 "--encrypt",
             ],
             stdin=subprocess.PIPE,
@@ -138,7 +159,7 @@ def package(
                 raise PackageError(f"gpg encryption failed ({len(stderr)} bytes suppressed)")
             if not partial.is_file() or partial.stat().st_size == 0:
                 raise PackageError("empty ciphertext")
-            run_gpg(base + ["--list-only", "--decrypt", str(partial)])
+            run_gpg(base + ["--list-only", "--decrypt", gpg_path(partial)])
             os.replace(partial, destination)
         except Exception:
             if partial.exists() and not partial.is_symlink():

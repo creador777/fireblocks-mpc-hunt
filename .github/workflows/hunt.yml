@@ -22,8 +22,17 @@ on:
         type: choice
         options:
           - "300"
+          - "900"
           - "3600"
           - "20700"
+      workers:
+        description: Fork-mode workers per shard (4 requires exact approved tuple)
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "4"
 
 permissions:
   contents: read
@@ -45,30 +54,28 @@ jobs:
       count: ${{ steps.plan.outputs.count }}
       matrix: ${{ steps.plan.outputs.matrix }}
       seconds: ${{ steps.plan.outputs.seconds }}
+      workers: ${{ steps.plan.outputs.workers }}
+      profile: ${{ steps.plan.outputs.profile }}
     steps:
+      - name: Checkout wave planner without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: hunt
+
       - name: Build a closed wave plan
         id: plan
         env:
           REQUESTED_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.shard_count || vars.FIREBLOCKS_SHARD_COUNT }}
           REQUESTED_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.budget_seconds || vars.FIREBLOCKS_BUDGET_SECONDS }}
+          REQUESTED_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || '1' }}
+          APPROVED_TUPLE: ${{ github.event_name == 'workflow_dispatch' && vars.FIREBLOCKS_HUNT_APPROVED_TUPLE || '' }}
+          APPROVED_UNTIL_EPOCH: ${{ github.event_name == 'workflow_dispatch' && vars.FIREBLOCKS_HUNT_APPROVED_UNTIL_EPOCH || '' }}
         run: |
           set -euo pipefail
-          case "${REQUESTED_COUNT}" in
-            1)  matrix='[0]' ;;
-            5)  matrix='[0,1,2,3,4]' ;;
-            15) matrix='[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14]' ;;
-            25) matrix='[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]' ;;
-            *) exit 64 ;;
-          esac
-          case "${REQUESTED_SECONDS}" in
-            300|3600|20700) ;;
-            *) exit 64 ;;
-          esac
-          {
-            printf 'count=%s\n' "${REQUESTED_COUNT}"
-            printf 'matrix=%s\n' "${matrix}"
-            printf 'seconds=%s\n' "${REQUESTED_SECONDS}"
-          } >> "${GITHUB_OUTPUT}"
+          bash hunt/scripts/plan_wave.sh \
+            "${REQUESTED_COUNT}" "${REQUESTED_WORKERS}" \
+            "${REQUESTED_SECONDS}" "${APPROVED_TUPLE}" "${APPROVED_UNTIL_EPOCH}"
 
   hunt:
     needs: plan
@@ -139,6 +146,8 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           BUDGET_SECONDS: ${{ needs.plan.outputs.seconds }}
+          FIREBLOCKS_HUNT_WORKERS: ${{ needs.plan.outputs.workers }}
+          FIREBLOCKS_HUNT_PROFILE: ${{ needs.plan.outputs.profile }}
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
@@ -146,7 +155,18 @@ jobs:
             "fireblocks-mpc-hunt:${GITHUB_RUN_ID}-${SHARD}" \
             "${SHARD}" "${BUDGET_SECONDS}" "${root}/corpus" "${root}/output"
 
+      - name: Validate shard corpus before any publication
+        id: validate_corpus
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          python3 scripts/validate_corpus.py "${root}/corpus"
+
       - name: Construct seven-field summary privately
+        id: summary
         working-directory: hunt
         env:
           SHARD: ${{ matrix.shard }}
@@ -158,18 +178,25 @@ jobs:
             "${root}/state/summary.public"
 
       - name: Encrypt evidence and verify plaintext cleanup
+        id: finalize
+        # Private finalizer (R3-4): runs even when a post-fuzzer gate (corpus
+        # validation, seven-field summary) failed, so evidence is always
+        # secured before the failure propagates. On any failure this step
+        # exits non-zero, so upload and publish below never run.
+        if: ${{ always() }}
         working-directory: hunt
         env:
           SHARD: ${{ matrix.shard }}
+          VALIDATE_OUTCOME: ${{ steps.validate_corpus.outcome }}
+          SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
           bundle="${root}/upload/incident-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SHARD}.gpg"
-          python3 scripts/package_incident.py \
+          bash scripts/cloud_finalize_incident.sh \
             "${root}/output/private_plain" \
-            keys/artifact-recipient.asc \
-            keys/artifact-recipient.fingerprint \
-            "${bundle}"
+            "${bundle}" \
+            "${VALIDATE_OUTCOME}" "${SUMMARY_OUTCOME}"
           test ! -e "${root}/output/private_plain"
           test -s "${bundle}"
           test "$(find "${root}/upload" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 1
@@ -182,6 +209,15 @@ jobs:
           if-no-files-found: error
           include-hidden-files: false
           retention-days: 7
+
+      - name: Revalidate shard corpus before private publish
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          python3 scripts/validate_corpus.py "${root}/corpus"
 
       - name: Publish corpus and encrypted incident to a unique private branch
         working-directory: hunt
