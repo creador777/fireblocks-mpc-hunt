@@ -97,3 +97,19 @@ target_link_libraries(opus_cmp_smoke PRIVATE opus_core)
 
 enable_testing()
 add_test(NAME selftest COMMAND opus_selftest)
+
+# --------------------------------------------------------------------------
+# V2 candidate: SEPARATE binary, corpus and artifacts. The V1 fuzzer build
+# inputs (fuzzer.cpp, mutators.cpp, driver.cpp, opus_core) are NOT touched,
+# so the V1 build stays byte-for-byte intact. The -fsanitize=fuzzer link
+# flags for the V2 target belong in the image build (docker/Dockerfile.fuzzer).
+# --------------------------------------------------------------------------
+add_library(opus_telemetry_v2 STATIC
+    src/telemetry_v2.cpp
+)
+target_link_libraries(opus_telemetry_v2 PUBLIC opus_core)
+
+add_executable(opus_cmp_fuzzer_reachability_v2 src/fuzzer_reachability_v2.cpp)
+target_compile_options(opus_cmp_fuzzer_reachability_v2 PRIVATE -fsanitize=fuzzer)
+target_link_options(opus_cmp_fuzzer_reachability_v2 PRIVATE -fsanitize=fuzzer)
+target_link_libraries(opus_cmp_fuzzer_reachability_v2 PRIVATE opus_telemetry_v2)
