@@ -24,6 +24,7 @@ on:
           - "300"
           - "900"
           - "3600"
+          - "7200"
           - "20700"
       workers:
         description: Fork-mode workers per shard (4 requires exact approved tuple)
@@ -304,7 +305,7 @@ jobs:
       - plan
       - hunt
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - name: Checkout public collector without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

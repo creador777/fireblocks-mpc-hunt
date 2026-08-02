@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import os
+import subprocess
+import tempfile
+import time
 import unittest
 
 
@@ -13,6 +17,7 @@ DOCKERFILE = (ROOT / "docker" / "Dockerfile.fuzzer").read_text(encoding="utf-8")
 FUZZER = (ROOT / "harness" / "cmp_ecdsa_online" / "src" / "fuzzer.cpp").read_text(
     encoding="utf-8"
 )
+PLANNER = ROOT / "scripts" / "plan_wave.sh"
 
 
 class WorkflowPolicyTests(unittest.TestCase):
@@ -113,6 +118,50 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("> /tmp/opus_cmp_fuzzer.ldd", linkage_lines[0])
         self.assertIn("grep -q 'not found' /tmp/opus_cmp_fuzzer.ldd", DOCKERFILE)
         self.assertIn("rm -f /tmp/opus_cmp_fuzzer.ldd", DOCKERFILE)
+
+    def test_12_two_hour_100_core_tuple_is_exact_and_fail_closed(self) -> None:
+        def plan(count: str, workers: str, seconds: str, approved: str, until: str):
+            with tempfile.TemporaryDirectory() as tempdir:
+                output_path = Path(tempdir) / "github-output"
+                env = os.environ.copy()
+                env["GITHUB_OUTPUT"] = str(output_path)
+                result = subprocess.run(
+                    ["bash", str(PLANNER), count, workers, seconds, approved, until],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                output = output_path.read_text() if output_path.exists() else ""
+                return result, output
+
+        now = int(time.time())
+        valid_until = str(now + 600)
+        result, output = plan("25", "4", "7200", "25x4x7200", valid_until)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("count=25\n", output)
+        self.assertIn("seconds=7200\n", output)
+        self.assertIn("workers=4\n", output)
+        self.assertIn("profile=cloud\n", output)
+
+        for approved, until in (
+            ("", ""),
+            ("25x4x900", valid_until),
+            ("25x4x7200", str(now - 1)),
+            ("25x4x7200", str(now + 1200)),
+            ("25x4x7200", "not-an-epoch"),
+        ):
+            result, _ = plan("25", "4", "7200", approved, until)
+            self.assertEqual(result.returncode, 64)
+
+        for count, workers in (("15", "4"), ("25", "1")):
+            result, _ = plan(count, workers, "7200", "25x4x7200", valid_until)
+            self.assertEqual(result.returncode, 64)
+
+        result, _ = plan(
+            "25", "4", "20700", "25x4x20700", valid_until
+        )
+        self.assertEqual(result.returncode, 64)
 
 
 if __name__ == "__main__":

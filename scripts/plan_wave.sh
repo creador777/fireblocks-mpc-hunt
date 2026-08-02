@@ -46,10 +46,10 @@ case "${TUPLE}" in
     15x1x300|15x1x3600|15x1x20700| \
     25x1x300|25x1x3600|25x1x20700)
         ;;
-    # Scaled tuples: only these five are authorizable at all, and only via an
+    # Scaled tuples: only these six are authorizable at all, and only via an
     # exact APPROVED_TUPLE match plus a valid short-lived expiry. 25x4x20700
     # is deliberately NOT listed: rejected even if the variables name it.
-    1x4x300|5x4x300|5x4x900|15x4x900|25x4x900)
+    1x4x300|5x4x300|5x4x900|15x4x900|25x4x900|25x4x7200)
         [[ -n "${APPROVED_TUPLE}" && "${APPROVED_TUPLE}" == "${TUPLE}" ]] || exit 64
         [[ "${APPROVED_UNTIL_EPOCH}" =~ ^[0-9]+$ ]] || exit 64
         now="$(date +%s)"

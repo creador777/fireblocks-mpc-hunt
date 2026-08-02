@@ -79,6 +79,10 @@ class CloudWindowWorkflowTests(unittest.TestCase):
         self.assertIn("publish_ingest.sh", publish)
         self.assertIn("emit_summary.py", emit)
 
+    def test_aggregate_has_capacity_for_twenty_five_private_branches(self) -> None:
+        aggregate = HUNT[HUNT.index("  aggregate:") :]
+        self.assertIn("timeout-minutes: 60", aggregate)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
