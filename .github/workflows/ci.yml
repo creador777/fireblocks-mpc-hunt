@@ -70,7 +70,8 @@ jobs:
             --mount "type=bind,src=${PWD},dst=/work,readonly" \
             --entrypoint python3 \
             fireblocks-mpc-hunt-tests:ci \
-            -m unittest -v tests.test_workflow_policy
+            -m unittest -v tests.test_workflow_policy \
+            tests.test_cloud_window_workflow
           docker run --rm \
             --network none \
             --read-only \
