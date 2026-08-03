@@ -210,6 +210,21 @@ jobs:
             "fireblocks-mpc-hunt:${GITHUB_RUN_ID}-${SHARD}" \
             "${SHARD}" "${BUDGET_SECONDS}" "${root}/corpus" "${root}/output"
 
+      - name: Quarantine interrupted corpus units before validation
+        working-directory: hunt
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          # A watchdog kill can cut a libFuzzer corpus write in half. Set the
+          # broken unit aside BEFORE the fail-closed validation so one bad
+          # unit does not forfeit every valid one. The validation still runs
+          # afterwards, unchanged, over whatever survives; structural
+          # anomalies (symlink, nested, non-hash name) keep failing closed.
+          python3 scripts/quarantine_corpus.py "${root}/corpus" \
+            "${root}/quarantine"
+
       - name: Validate shard corpus before any publication
         id: validate_corpus
         working-directory: hunt
@@ -275,6 +290,12 @@ jobs:
           python3 scripts/validate_corpus.py "${root}/corpus"
 
       - name: Publish corpus and encrypted incident to a unique private branch
+        # !cancelled(), never always(): always() is true ALSO when the job
+        # was cancelled, and a cancellation must never trigger a write to the
+        # private brain. outcome, not conclusion: the fuzzer step carries
+        # continue-on-error, so its conclusion reads success even when it
+        # failed and would not distinguish anything.
+        if: ${{ !cancelled() && steps.validate_corpus.outcome == 'success' && steps.summary.outcome == 'success' && steps.finalize.outcome == 'success' }}
         working-directory: hunt
         env:
           SHARD: ${{ matrix.shard }}

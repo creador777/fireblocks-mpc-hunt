@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -25,6 +26,11 @@ FORBIDDEN = (
     r"C:\Users\private-user",
     "input bytes",
 )
+ALLOWLIST_FILE = ROOT / "scripts" / "frame-allowlist.txt"
+#: Canario garantizadamente AUSENTE de la allowlist: si algún día entrara en
+#: ella, el control negativo dejaría de probar algo y este test falla aquí.
+CANARY = "ZZCANARIO_no_es_un_simbolo_del_binarioZZ"
+FRAME_SYMBOL = re.compile(r"[A-Za-z][A-Za-z0-9_:~<>]{0,127}\Z")
 
 
 def write_private(root: Path, log: bytes, exit_code: int = 0) -> None:
@@ -40,12 +46,19 @@ class SecurityBoundaryTests(unittest.TestCase):
             private = base / "private"
             artifact_data = b"synthetic-input-bytes"
             artifact = "crash-" + hashlib.sha1(artifact_data).hexdigest()
+            # Control positivo: un símbolo REAL de la allowlist (extraída del
+            # binario). Control negativo: el canario, ausente por contrato.
+            allowed = ALLOWLIST_FILE.read_text(encoding="ascii").split()
+            self.assertNotIn(CANARY, allowed)
+            positive = next(
+                symbol for symbol in allowed if FRAME_SYMBOL.fullmatch(symbol))
             log = (
                 b"ERROR: AddressSanitizer: heap-buffer-overflow\n"
-                b"#0 0x1234abcd in target_function /home/runner/private.cc:9\n"
-                b"Base64:QUJDREVGRw==\nMS: 1 ASCII unit\n"
-                b"artifact_prefix=/tmp/private Test unit written to /tmp/private\n"
-                b"C:\\Users\\private-user\\secret input bytes 41424344\n"
+                + f"#0 0x1234abcd in {positive} /home/runner/private.cc:9\n".encode()
+                + f"#1 0xdeadbeef in {CANARY} /home/runner/private.cc:10\n".encode()
+                + b"Base64:QUJDREVGRw==\nMS: 1 ASCII unit\n"
+                + b"artifact_prefix=/tmp/private Test unit written to /tmp/private\n"
+                + b"C:\\Users\\private-user\\secret input bytes 41424344\n"
                 + b"X" * 100_000
                 + b"\xff\xfe\n"
             )
@@ -60,7 +73,10 @@ class SecurityBoundaryTests(unittest.TestCase):
             emitted = emit_summary.validate(summary)
             self.assertEqual(len(emitted.splitlines()), 7)
             self.assertIn("sanitizer=asan", emitted)
-            self.assertIn("stack_normalized=target_function", emitted)
+            # El símbolo legítimo se publica; el canario queda como "unknown"
+            # y nunca sale al canal público.
+            self.assertIn(f"stack_normalized={positive}>unknown", emitted)
+            self.assertNotIn(CANARY, emitted)
             self.assertIn(hashlib.sha256(artifact_data).hexdigest(), emitted)
             for marker in FORBIDDEN:
                 self.assertNotIn(marker, emitted)

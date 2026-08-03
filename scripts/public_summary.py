@@ -12,6 +12,14 @@ import sys
 
 ARTIFACT = re.compile(r"(crash|timeout|oom|slow-unit)-[0-9a-f]{40}\Z")
 FRAME = re.compile(rb"#[0-9]+ +0x[0-9a-fA-F]+ +in +([A-Za-z_~][A-Za-z0-9_:~<>]{0,127})")
+# Frame allowlist fixed OUTSIDE the log: extracted from the fuzzer binary at
+# build time and versioned next to this script. A frame whose symbol is not
+# listed is published as "unknown". The alternative — trusting the token's
+# shape — bounds nothing: a symbol name is free text chosen by whoever wrote
+# the log, and it would be printed to the public stdout of a public repo.
+ALLOWED_FRAMES = frozenset(
+    (Path(__file__).with_name("frame-allowlist.txt")
+     .read_text(encoding="ascii").split()))
 FIELDS = (
     "harness",
     "shard",
@@ -84,6 +92,8 @@ def normalized_stack(log: bytes) -> str:
         if not match:
             continue
         frame = match.group(1).decode("ascii", errors="strict")
+        if frame not in ALLOWED_FRAMES:
+            frame = "unknown"
         if frame not in frames:
             frames.append(frame)
         if len(frames) == 8:
@@ -113,7 +123,7 @@ def build(private_root: Path, harness: str, shard_text: str) -> dict[str, str]:
 
     artifacts: list[tuple[Path, str]] = []
     for name, path in by_name.items():
-        if name in {"fuzzer.raw.log", "exit_code"}:
+        if name in {"fuzzer.raw.log", "exit_code", "oom_killed"}:
             continue
         match = ARTIFACT.fullmatch(name)
         if not match or path.stat().st_size > 32 * 1024 * 1024:
@@ -125,7 +135,12 @@ def build(private_root: Path, harness: str, shard_text: str) -> dict[str, str]:
     artifact_kind = artifacts[0][1] if artifacts else None
     sanitizer, summary = classify(log, artifact_kind)
     if not artifacts and int(exit_text) != 0:
-        sanitizer, summary = "tool", "execution_failed"
+        if int(exit_text) == 72:
+            sanitizer, summary = "tool", "budget_exhausted"
+        elif int(exit_text) == 73:
+            sanitizer, summary = "tool", "container_oom"
+        else:
+            sanitizer, summary = "tool", "execution_failed"
     digest = (
         hashlib.sha256(artifacts[0][0].read_bytes()).hexdigest()
         if artifacts

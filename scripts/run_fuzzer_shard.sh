@@ -85,6 +85,19 @@ if [[ ! "${RUN_ID}" =~ ^(local|[0-9]+)$ ]]; then
 fi
 CONTAINER_NAME="fireblocks-hunt-${RUN_ID}-${SHARD}"
 
+# Cancellation (SIGTERM/SIGINT from the runner): leave the minimum evidence
+# (exit_code=143 = 128+SIGTERM, raw log) and remove the container. Nothing is
+# printed: stdout/stderr of this script belong to a closed one-line grammar.
+on_cancel() {
+    trap - TERM INT
+    set +e
+    printf '%s\n' "143" > "${PRIVATE_DIR}/exit_code" 2>/dev/null
+    [[ -e "${RAW_LOG}" ]] || : > "${RAW_LOG}" 2>/dev/null
+    docker rm -f -- "${CONTAINER_NAME}" >> "${RAW_LOG}" 2>&1
+    exit 143
+}
+trap on_cancel TERM INT
+
 # Resource profiles. WORKERS=1 is bit-identical to the current cloud/default
 # profile. The "local" profile budgets against the local Docker VM (8 x 768
 # MiB of RSS plus ~0.5 GiB of parent below 7168 MiB) and keeps a 2-CPU
@@ -130,7 +143,13 @@ command -v timeout >/dev/null 2>&1 || fail_rc 69
 WATCHDOG_SECONDS=$((SECONDS_LIMIT + 60))
 
 set +e
-MSYS_NO_PATHCONV=1 timeout --signal=TERM --kill-after=15 "${WATCHDOG_SECONDS}" docker run --rm \
+# No --rm: the container state (.State.OOMKilled) is the only way to tell a
+# cgroup OOM apart from a watchdog kill, because both surface here as 137.
+# With --rm that read races the automatic removal. Any stale container from
+# an interrupted previous attempt is removed first, and this run's container
+# is removed below, always, after its state has been read.
+docker rm -f -- "${CONTAINER_NAME}" >> "${RAW_LOG}" 2>&1 || true
+MSYS_NO_PATHCONV=1 timeout --signal=TERM --kill-after=15 "${WATCHDOG_SECONDS}" docker run \
     --name "${CONTAINER_NAME}" \
     --network none \
     --read-only \
@@ -160,16 +179,32 @@ MSYS_NO_PATHCONV=1 timeout --signal=TERM --kill-after=15 "${WATCHDOG_SECONDS}" d
     >"${RAW_LOG}" 2>&1
 RC=$?
 
-# GNU timeout returns 124 after its deadline. If escalation reached SIGKILL,
-# 137 is treated as watchdog only while the named container still exists;
-# a container that independently OOM-killed and was removed remains 137.
-if (( RC == 124 )) ||
-   { (( RC == 137 )) && docker ps -a --format '{{.Names}}' | grep -Fqx -- "${CONTAINER_NAME}"; }; then
-    timeout --signal=TERM --kill-after=5 20 \
-        docker stop --timeout 10 -- "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-    timeout --signal=TERM --kill-after=5 20 \
-        docker rm -f -- "${CONTAINER_NAME}" >/dev/null 2>&1 || true
-    RC=70
+# C1 exit classification. The container state is read BEFORE any removal.
+# 70/71/77 come from libFuzzer itself (findings) and are never rewritten.
+# 124 is GNU timeout's own report that the watchdog expired, so it needs no
+# further evidence. A 137 is ambiguous: it becomes 73 (CGROUP_OOM) when
+# Docker recorded the OOM kill, 72 (HOST_WATCHDOG) when the container is
+# still present, was not OOM-killed and the fuzzer was producing output
+# (the watchdog escalated to SIGKILL), and 74 (UNKNOWN_FAIL_CLOSED) when
+# there is not enough evidence to name a cause without inventing one.
+OOM_KILLED="$(docker inspect --format '{{.State.OOMKilled}}' -- \
+    "${CONTAINER_NAME}" 2>> "${RAW_LOG}" || true)"
+printf '%s\n' "${OOM_KILLED:-unknown}" > "${PRIVATE_DIR}/oom_killed"
+
+timeout --signal=TERM --kill-after=5 20 \
+    docker rm -f -- "${CONTAINER_NAME}" >> "${RAW_LOG}" 2>&1 || true
+
+if (( RC == 124 || RC == 137 )); then
+    if [[ "${OOM_KILLED}" == "true" ]]; then
+        RC=73
+    elif (( RC == 124 )); then
+        RC=72
+    elif [[ "${OOM_KILLED}" == "false" ]] &&
+         grep -qE '^#[0-9]+[[:space:]]' "${RAW_LOG}" 2>/dev/null; then
+        RC=72
+    else
+        RC=74
+    fi
 fi
 set -e
 
