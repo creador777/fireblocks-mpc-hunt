@@ -10,9 +10,6 @@ import stat
 import sys
 
 
-#: Superficies conocidas. El harness identifica QUE se fuzzea; arm_id,
-#: aparte, identifica quien decidio el presupuesto.
-HARNESSES = ("cmp_ecdsa_online", "cmp_ecdsa_online_r4_tn")
 ARTIFACT = re.compile(r"(crash|timeout|oom|slow-unit)-[0-9a-f]{40}\Z")
 FRAME = re.compile(rb"#[0-9]+ +0x[0-9a-fA-F]+ +in +([A-Za-z_~][A-Za-z0-9_:~<>]{0,127})")
 # Frame allowlist fixed OUTSIDE the log: extracted from the fuzzer binary at
@@ -108,11 +105,7 @@ def normalized_stack(log: bytes) -> str:
 
 
 def build(private_root: Path, harness: str, shard_text: str) -> dict[str, str]:
-    # Allowlist CERRADA de superficies. Debe permanecer identica a
-    # RULES["harness"] de emit_summary.py: si divergen, el productor
-    # emite algo que el emisor rechaza y la cadena entera se cae en el
-    # paso de emision. tests/test_harness_contract.py exige la igualdad.
-    if harness not in HARNESSES:
+    if harness != "cmp_ecdsa_online":
         raise SummaryError("unexpected harness")
     if not shard_text.isdecimal() or not 0 <= int(shard_text) < 25:
         raise SummaryError("invalid shard")
@@ -130,7 +123,7 @@ def build(private_root: Path, harness: str, shard_text: str) -> dict[str, str]:
 
     artifacts: list[tuple[Path, str]] = []
     for name, path in by_name.items():
-        if name in {"fuzzer.raw.log", "exit_code", "oom_killed", "harness"}:
+        if name in {"fuzzer.raw.log", "exit_code", "oom_killed"}:
             continue
         match = ARTIFACT.fullmatch(name)
         if not match or path.stat().st_size > 32 * 1024 * 1024:

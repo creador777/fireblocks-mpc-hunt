@@ -8,10 +8,7 @@ import sys
 
 
 RULES = {
-    # Identica a HARNESSES de public_summary.py. Actualizar SIEMPRE las
-    # dos en el mismo commit: tests/test_harness_contract.py falla si no.
-    "harness": re.compile(
-        r"(?:cmp_ecdsa_online|cmp_ecdsa_online_r4_tn)\Z"),
+    "harness": re.compile(r"cmp_ecdsa_online\Z"),
     "shard": re.compile(r"(?:[0-9]|1[0-9]|2[0-4])\Z"),
     "exit_code": re.compile(r"(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\Z"),
     "sanitizer": re.compile(r"(?:none|asan|ubsan|msan|oracle|libfuzzer|multiple|tool)\Z"),

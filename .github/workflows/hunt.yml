@@ -26,19 +26,6 @@ on:
           - "3600"
           - "7200"
           - "20700"
-      lane:
-        description: Execution lane; the harness is derived from it
-        required: true
-        # select_lane es un CENTINELA, no una lane. Va primero para que el
-        # menu aparezca relleno, y plan_wave.sh lo rechaza con 64 igual que un
-        # valor vacio o desconocido: la UI queda usable y no hay lane por
-        # defecto que se lance sola.
-        default: select_lane
-        type: choice
-        options:
-          - select_lane
-          - cmp_general
-          - cmp_r4_tn
       workers:
         description: Fork-mode workers per shard (4 requires exact approved tuple)
         required: true
@@ -70,7 +57,6 @@ jobs:
       seconds: ${{ steps.plan.outputs.seconds }}
       workers: ${{ steps.plan.outputs.workers }}
       profile: ${{ steps.plan.outputs.profile }}
-      lane: ${{ github.event_name == 'workflow_dispatch' && inputs.lane || vars.FIREBLOCKS_LANE }}
       brain_sha: ${{ steps.brain_revision.outputs.sha }}
     steps:
       - name: Checkout wave planner without persisted credentials
@@ -117,20 +103,6 @@ jobs:
           [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]
           test "$(git cat-file -t "${sha}")" = commit
           printf 'sha=%s\n' "${sha}" >> "${GITHUB_OUTPUT}"
-
-      - name: Reject the lane sentinel and any unknown lane
-        env:
-          REQUESTED_LANE: ${{ github.event_name == 'workflow_dispatch' && inputs.lane || vars.FIREBLOCKS_LANE }}
-        run: |
-          set -euo pipefail
-          # select_lane, vacio y desconocido caen todos aqui. La rama
-          # programada no tiene menu, asi que exige vars.FIREBLOCKS_LANE
-          # explicita: sin ella no arranca ninguna ola.
-          if [[ -z "${REQUESTED_LANE}" || "${REQUESTED_LANE}" == "select_lane" ]]; then
-            printf 'status=fail_closed code=lane_not_selected\n' >&2
-            exit 64
-          fi
-          bash hunt/scripts/lane_harness.sh "${REQUESTED_LANE}" > /dev/null
 
       - name: Build a closed wave plan
         id: plan
@@ -231,15 +203,12 @@ jobs:
           BUDGET_SECONDS: ${{ needs.plan.outputs.seconds }}
           FIREBLOCKS_HUNT_WORKERS: ${{ needs.plan.outputs.workers }}
           FIREBLOCKS_HUNT_PROFILE: ${{ needs.plan.outputs.profile }}
-          FIREBLOCKS_LANE: ${{ needs.plan.outputs.lane }}
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
-          test -n "${FIREBLOCKS_LANE}"
           bash scripts/run_fuzzer_shard.sh \
             "fireblocks-mpc-hunt:${GITHUB_RUN_ID}-${SHARD}" \
-            "${SHARD}" "${BUDGET_SECONDS}" "${root}/corpus" "${root}/output" \
-            "${FIREBLOCKS_LANE}"
+            "${SHARD}" "${BUDGET_SECONDS}" "${root}/corpus" "${root}/output"
 
       - name: Quarantine interrupted corpus units before validation
         working-directory: hunt
@@ -274,12 +243,8 @@ jobs:
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
-          # El harness lo derivo run_fuzzer_shard.sh del mapping cerrado.
-          # Vacio o ausente es fail-closed: nunca se asume una superficie.
-          harness="$(cat "${root}/output/private_plain/harness")"
-          test -n "${harness}"
           python3 scripts/public_summary.py \
-            "${root}/output/private_plain" "${harness}" "${SHARD}" \
+            "${root}/output/private_plain" cmp_ecdsa_online "${SHARD}" \
             "${root}/state/summary.public"
 
       - name: Encrypt evidence and verify plaintext cleanup
@@ -335,18 +300,13 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           FIREBLOCKS_BRAIN_WRITE_TOKEN: ${{ secrets.FIREBLOCKS_BRAIN_WRITE_TOKEN }}
-          FIREBLOCKS_LANE: ${{ needs.plan.outputs.lane }}
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
-          # Mismo harness derivado: corpus, incidente y rama quedan en el
-          # subarbol de SU superficie y no pueden cruzarse con la otra lane.
-          harness="$(bash scripts/lane_harness.sh "${FIREBLOCKS_LANE}")"
-          test -n "${harness}"
           bash scripts/publish_ingest.sh \
             "${root}/corpus" \
             "${root}/upload/incident-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SHARD}.gpg" \
-            "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" "${SHARD}" "${harness}"
+            "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" "${SHARD}"
 
       - name: Emit only the seven-field public summary
         working-directory: hunt

@@ -18,9 +18,8 @@ trap 'rm -rf -- "${TMP}"' EXIT
 mkdir -p "${TMP}/corpus" "${TMP}/output"
 printf 'CMPSEED00' > "${TMP}/corpus/seed"
 
-# Lane explicita tambien en el humo local: sin ella el shard sale 64.
 "${ROOT}/scripts/run_fuzzer_shard.sh" \
-    "${IMAGE}" 0 60 "${TMP}/corpus" "${TMP}/output" "${FIREBLOCKS_LANE:-cmp_general}"
+    "${IMAGE}" 0 60 "${TMP}/corpus" "${TMP}/output"
 
 test -s "${TMP}/output/private_plain/fuzzer.raw.log"
 test "$(tr -d '\r\n' < "${TMP}/output/private_plain/exit_code")" = "0"

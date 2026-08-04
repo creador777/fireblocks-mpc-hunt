@@ -148,19 +148,13 @@ std::vector<uint64_t> snapshot::player_ids() const
 // generate
 // ---------------------------------------------------------------------------
 
-snapshot generate_snapshot(uint64_t seed, const std::vector<uint64_t>& ids, uint8_t t, std::string& err)
+snapshot generate_snapshot(uint64_t seed, const std::vector<uint64_t>& ids, std::string& err)
 {
     snapshot s;
     err.clear();
 
     if (ids.size() < 2) {
         err = "need at least 2 players (a run with fewer cannot have both an honest and a malicious party)";
-        return s;
-    }
-    if (t == 0)
-        t = static_cast<uint8_t>(ids.size());
-    if (t < 2 || t > ids.size()) {
-        err = "threshold out of range: need 2 <= t <= player count";
         return s;
     }
 
@@ -170,23 +164,17 @@ snapshot generate_snapshot(uint64_t seed, const std::vector<uint64_t>& ids, uint
     if (!algebra) { err = "failed to create secp256k1 algebra"; return s; }
 
     s.algorithm = static_cast<uint32_t>(ECDSA_SECP256K1);
-    s.t = t;
+    s.t = static_cast<uint8_t>(ids.size());
     s.n = static_cast<uint8_t>(ids.size());
     s.seed.assign(sizeof(commitments_sha256_t), 0); // all-zero seed, as upstream setup does
 
     // Additive shares: derived deterministically from the seed, then reduced
     // into the scalar field. Synthetic values only -- no real key material.
-    //
-    // The aggregate key accumulates ONLY the first t players' shares (the
-    // designated signer set); the remaining n - t players are fixture-only
-    // and never sign. For t == n this is exactly the historical behaviour.
     elliptic_curve256_scalar_t sum;
     memset(sum, 0, sizeof(sum));
     bool first = true;
-    size_t signer_idx = 0;
 
     for (uint64_t id : ids) {
-        const bool designated_signer = (signer_idx++ < t);
         snapshot_player p;
         p.id = id;
 
@@ -214,18 +202,14 @@ snapshot generate_snapshot(uint64_t seed, const std::vector<uint64_t>& ids, uint
         }
         p.public_share.assign(pub_share, pub_share + sizeof(elliptic_curve256_point_t));
 
-        // Only the designated signer set feeds the aggregate public key; the
-        // ceremony later runs with exactly those t players.
-        if (designated_signer) {
-            if (first) {
-                memcpy(sum, reduced, sizeof(sum));
-                first = false;
-            } else if (algebra->add_scalars(algebra.get(), &sum,
-                                            sum, sizeof(sum),
-                                            reduced, sizeof(reduced)) != ELLIPTIC_CURVE_ALGEBRA_SUCCESS) {
-                err = "add_scalars failed for player " + std::to_string(id);
-                return s;
-            }
+        if (first) {
+            memcpy(sum, reduced, sizeof(sum));
+            first = false;
+        } else if (algebra->add_scalars(algebra.get(), &sum,
+                                        sum, sizeof(sum),
+                                        reduced, sizeof(reduced)) != ELLIPTIC_CURVE_ALGEBRA_SUCCESS) {
+            err = "add_scalars failed for player " + std::to_string(id);
+            return s;
         }
 
         // --- auxiliary material: produced by the library's own generators ---
@@ -285,22 +269,15 @@ bool verify_snapshot(const snapshot& s, std::string& err)
     if (!algebra) { err = "no algebra"; return false; }
 
     if (s.players.size() < 2)                     { err = "fewer than 2 players"; return false; }
-    // The library requires the ceremony's players_ids.size() == metadata.t
-    // (cmp_ecdsa_online_signing_service.cpp:59). t may be SMALLER than the
-    // player count: the first t players are then the designated signer set
-    // and the remaining n - t players are fixture-only (they never sign).
-    if (s.t < 2 || s.t > s.players.size())        { err = "t outside 2..player count"; return false; }
-    if (s.n != s.players.size())                  { err = "n != player count"; return false; }
+    if (s.t != s.players.size())                  { err = "t != player count (start_signing:59 requires equality)"; return false; }
     if (s.public_key.size() != sizeof(elliptic_curve256_point_t)) { err = "bad public key length"; return false; }
     if (s.seed.size() != sizeof(commitments_sha256_t))            { err = "bad seed length"; return false; }
 
     elliptic_curve256_scalar_t sum;
     memset(sum, 0, sizeof(sum));
     bool first = true;
-    size_t signer_idx = 0;
 
     for (const auto& p : s.players) {
-        const bool designated_signer = (signer_idx++ < s.t);
         if (p.share.size() != sizeof(elliptic_curve256_scalar_t)) { err = "bad share length"; return false; }
         if (p.public_share.size() != sizeof(elliptic_curve256_point_t)) { err = "bad public_share length"; return false; }
 
@@ -320,12 +297,10 @@ bool verify_snapshot(const snapshot& s, std::string& err)
             return false;
         }
 
-        if (designated_signer) {
-            if (first) { memcpy(sum, x, sizeof(sum)); first = false; }
-            else if (algebra->add_scalars(algebra.get(), &sum, sum, sizeof(sum), x, sizeof(x))
-                     != ELLIPTIC_CURVE_ALGEBRA_SUCCESS) {
-                err = "add_scalars failed"; return false;
-            }
+        if (first) { memcpy(sum, x, sizeof(sum)); first = false; }
+        else if (algebra->add_scalars(algebra.get(), &sum, sum, sizeof(sum), x, sizeof(x))
+                 != ELLIPTIC_CURVE_ALGEBRA_SUCCESS) {
+            err = "add_scalars failed"; return false;
         }
 
         // Aux private material must round-trip and its public projection must
@@ -362,10 +337,8 @@ bool verify_snapshot(const snapshot& s, std::string& err)
         }
     }
 
-    // public_key == g^{sum of the DESIGNATED SIGNER shares} (the first t
-    // players). Enforced by the library's own final signature verification
-    // (cmp_ecdsa_online_signing_service.cpp:493-498), which runs over exactly
-    // the ceremony's signers.
+    // public_key == g^{sum of shares}. Enforced by the library's own final
+    // signature verification (cmp_ecdsa_online_signing_service.cpp:493-498).
     elliptic_curve256_point_t X;
     memset(X, 0, sizeof(X));
     if (algebra->generator_mul(algebra.get(), &X, &sum) != ELLIPTIC_CURVE_ALGEBRA_SUCCESS) {

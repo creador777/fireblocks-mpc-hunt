@@ -63,17 +63,7 @@ struct snapshot
 
 // Produce a snapshot from scratch. SLOW (Paillier + safe-prime generation).
 // Runs under the deterministic RNG, so a given seed yields identical bytes.
-//
-// `t` is the ceremony threshold: the number of players that actually sign
-// (the library requires players_ids.size() == metadata.t at
-// cmp_ecdsa_online_signing_service.cpp:59). t == 0 means t = ids.size(), the
-// historical n-of-n, and produces byte-identical output to pre-threshold
-// versions. For t < ids.size() the FIRST t ids, in the order given, are the
-// designated signer set and the aggregate public key is g^{sum of their
-// shares}; the remaining players exist in the fixture
-// (cmp_key_metadata.players_info) but never sign. This is what makes a real
-// players_ids - signers_ids non-empty for the EXTRA_MAP_KEY surface.
-snapshot generate_snapshot(uint64_t seed, const std::vector<uint64_t>& ids, uint8_t t, std::string& err);
+snapshot generate_snapshot(uint64_t seed, const std::vector<uint64_t>& ids, std::string& err);
 
 bool write_snapshot(const snapshot& s, const std::string& path, std::string& err);
 bool read_snapshot(const std::string& path, snapshot& out, std::string& err);

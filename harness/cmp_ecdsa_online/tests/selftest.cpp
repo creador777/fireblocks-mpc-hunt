@@ -87,21 +87,7 @@ int main(int argc, char** argv)
     if (!sess.ok())
         return 1;
 
-    // Conjunto de firmantes designado del fixture: los primeros t ids, la
-    // misma convencion que generate_snapshot y el fuzzer de alcanzabilidad.
-    // Sobre un fixture n=n queda VACIO y run() se comporta exactamente igual
-    // que antes; sobre uno t<n es lo que start_signing exige
-    // (cmp_ecdsa_online_signing_service.cpp:59). Sin esto, los tests
-    // principales rechazan con "signer count n != snapshot threshold t" y el
-    // selftest entero deja de ser un control util sobre t<n.
-    std::vector<uint64_t> selftest_signers;
-    if (static_cast<size_t>(snap.t) < snap.players.size()) {
-        const std::vector<uint64_t> all = snap.player_ids();
-        selftest_signers.assign(all.begin(), all.begin() + snap.t);
-    }
-
     opus::run_config control;
-    control.signers_ids = selftest_signers;
     control.seed = 0x1111;
     control.txid = "selftest-control-1";
     control.blocks = 1;
@@ -145,7 +131,6 @@ int main(int argc, char** argv)
     // harness can distinguish "rejected" from "accepted".
     {
         opus::run_config tampered;
-        tampered.signers_ids = selftest_signers;
         tampered.seed = 0x2222;
         tampered.txid = "selftest-tamper-r1-proof";
         tampered.blocks = 1;
@@ -176,7 +161,6 @@ int main(int argc, char** argv)
     // -----------------------------------------------------------------------
     {
         opus::run_config tampered;
-        tampered.signers_ids = selftest_signers;
         tampered.seed = 0x3333;
         tampered.txid = "selftest-tamper-r2-ack";
         tampered.blocks = 1;
@@ -202,7 +186,6 @@ int main(int argc, char** argv)
     // -----------------------------------------------------------------------
     {
         opus::run_config bad;
-        bad.signers_ids = selftest_signers;
         bad.seed = 0x4444;
         bad.txid = "selftest-all-malicious";
         for (const auto& p : snap.players)
@@ -264,64 +247,6 @@ int main(int argc, char** argv)
         } else {
             check(false, "control produced a signature to test the oracle with");
         }
-    }
-
-    // -----------------------------------------------------------------------
-    section("T11 EXTRA_MAP_KEY on a t<n fixture is applied, then rejected by the consumer");
-    // -----------------------------------------------------------------------
-    // The fixture's designated signer set (the first t player ids) runs the
-    // ceremony; the remaining fixture players never sign. The mutation inserts
-    // an si entry attributed to one of those non-signers. The consumer's own
-    // signer-count guard (cmp_ecdsa_online_signing_service.cpp:437) must
-    // reject the enlarged map: this test asserts the rejection end-to-end
-    // rather than assuming it, so a silent acceptance would surface as FAIL.
-    if (static_cast<size_t>(snap.t) < snap.players.size()) {
-        const std::vector<uint64_t> ids = snap.player_ids();
-        const std::vector<uint64_t> signers(ids.begin(), ids.begin() + snap.t);
-
-        // Control: the t<n fixture itself must sign honestly. Without this, a
-        // broken fixture could masquerade as a correct rejection below.
-        {
-            opus::run_config tn_control;
-            tn_control.seed = 0x5555;
-            tn_control.txid = "selftest-tn-control";
-            tn_control.blocks = 1;
-            tn_control.signers_ids = signers;
-
-            opus::run_result rc = sess.run(tn_control);
-            std::cout << "  t<n control: " << rc.summary() << "\n";
-            check(rc.v == opus::verdict::CLEAN_SIGN,
-                  "t<n honest control is CLEAN-SIGN", rc.detail);
-            check(rc.key_store_unchanged, "t<n control leaves the key store unchanged");
-        }
-
-        {
-            opus::run_config tampered;
-        tampered.signers_ids = selftest_signers;
-            tampered.seed = 0x6666;
-            tampered.txid = "selftest-extra-map-key";
-            tampered.blocks = 1;
-            tampered.malicious_ids = {signers.back()};
-            tampered.signers_ids = signers;
-
-            opus::mutation m;
-            m.round = 4;
-            m.attacker = signers.back();
-            m.field = opus::wire_field::R4_SI;
-            m.op = opus::wire_op::EXTRA_MAP_KEY;
-            tampered.mutations.push_back(m);
-
-            opus::run_result rt = sess.run(tampered);
-            std::cout << "  extra_map_key: " << rt.summary() << "\n";
-            check(rt.mutations_applied > 0, "EXTRA_MAP_KEY actually inserted an entry");
-            check(rt.v == opus::verdict::CLEAN_REJECT,
-                  "the enlarged si map is rejected, not accepted", rt.detail);
-            check(rt.failed_round == 5,
-                  "the rejection fires at get_cmp_signature (round 5)", rt.detail);
-            check(rt.key_store_unchanged, "key store digest unchanged after the rejected run");
-        }
-    } else {
-        std::cout << "  (snapshot is n-of-n; T11 skipped -- regenerate with mk_snapshot --t to enable it)\n";
     }
 
     // -----------------------------------------------------------------------
