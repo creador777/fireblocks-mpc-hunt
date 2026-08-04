@@ -20,6 +20,7 @@ CELL_KEYS = (
     "r1.mta_proofs[victim]|flip_bit",
     "r1.mta_proofs[victim]|zero",
     "r1.mta_proofs[victim]|truncate",
+    "r4.si|extra_map_key",
 )
 VERDICT_KEYS = (
     "CLEAN-SIGN",
@@ -138,20 +139,28 @@ class CollectorCase(unittest.TestCase):
         return validate_rt4.validate(telemetry, claims)
 
     def test_accepts_generations_and_measures_half_open_overlap(self) -> None:
-        self.write_job(make_doc(0, 2, 100, 200))
-        self.write_job(make_doc(1, 2, 150, 250))
-        self.write_job(make_doc(2, 2, 250, 350))
+        # Un job por celda: el validador exige que TODAS se alcancen, asi que
+        # una cuenta fija de jobs empieza a dar CELL_UNREACHED en cuanto se
+        # añade una celda -- que es como se rompio al llegar
+        # r4.si|extra_map_key. Las ventanas se generan solapando cada job con
+        # el siguiente y solo con el siguiente, asi que max_overlap vale 2
+        # sea cual sea el numero de celdas.
+        jobs = len(CELL_KEYS)
+        self.assertGreaterEqual(jobs, 2, "hacen falta dos jobs para solapar")
+        for job in range(jobs):
+            self.write_job(make_doc(job, 2, 100 * job, 100 * job + 150))
         result = self.validate()
         self.assertEqual(set(result), RESULT_KEYS)
         self.assertIs(result["telemetry_valid"], True)
         self.assertEqual(result["decision"], "SHADOW_READY")
-        self.assertEqual((result["jobs"], result["parallelism"], result["max_overlap"]), (3, 2, 2))
+        self.assertEqual((result["jobs"], result["parallelism"], result["max_overlap"]),
+                         (jobs, 2, 2))
         totals = result["totals"]
         assert isinstance(totals, dict)
-        self.assertEqual((totals["execs"], totals["decoded"]), (3, 3))
-        self.assertEqual(sum(totals["selected"].values()), 3)
-        self.assertEqual(sum(totals["applied"].values()), 3)
-        self.assertEqual(totals["verdicts"]["CLEAN-REJECT"], 3)
+        self.assertEqual((totals["execs"], totals["decoded"]), (jobs, jobs))
+        self.assertEqual(sum(totals["selected"].values()), jobs)
+        self.assertEqual(sum(totals["applied"].values()), jobs)
+        self.assertEqual(totals["verdicts"]["CLEAN-REJECT"], jobs)
 
     def test_accepts_one_job_when_parallelism_is_eight(self) -> None:
         self.write_job(make_complete_doc(7, 8, 100, 200))

@@ -256,6 +256,35 @@ class HarnessContractTests(unittest.TestCase):
                          f"corpus/{digest}"):
             self.assertIsNone(pattern.match(crossing), crossing)
 
+    def test_15_the_cell_allowlist_agrees_with_the_harness(self):
+        """CELLS del C++ y CELL_KEYS del validador son la misma lista.
+
+        Habia cuatro copias de esta lista y al añadir r4.si|extra_map_key
+        actualicé tres. La cuarta, la de validate_rt4.py, rechazaba con
+        SELECTED_MAP la telemetria que el harness emitia correctamente: el
+        validador exige una entrada por celda conocida, ni una mas ni una
+        menos. Nada lo detecto porque ningun test comparaba las copias.
+        """
+        source = (ROOT / "harness" / "cmp_ecdsa_online" / "src"
+                  / "telemetry_v2.cpp").read_text(encoding="utf-8")
+        block = re.search(r"CELLS\[\]\s*=\s*\{(.*?)\};", source, re.S)
+        self.assertIsNotNone(block, "telemetry_v2.cpp no define CELLS")
+        # Solo las cadenas: los comentarios del bloque no son celdas.
+        from_cpp = tuple(re.findall(r'"((?:[^"\\]|\\.)*)"', block.group(1)))
+        self.assertTrue(from_cpp, "CELLS quedo vacio")
+
+        validator = (ROOT / "scripts" / "validate_rt4.py").read_text(
+            encoding="utf-8")
+        declaration = re.search(r"^CELL_KEYS\s*=\s*\((.*?)\)", validator,
+                                re.S | re.M)
+        self.assertIsNotNone(declaration, "validate_rt4.py no define CELL_KEYS")
+        from_validator = tuple(
+            re.findall(r'"((?:[^"\\]|\\.)*)"', declaration.group(1)))
+
+        self.assertEqual(from_cpp, from_validator,
+                         "CELLS y CELL_KEYS divergen: la telemetria valida "
+                         "del harness seria rechazada por el validador")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

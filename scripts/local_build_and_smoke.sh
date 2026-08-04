@@ -34,6 +34,23 @@ for lane in cmp_general cmp_r4_tn; do
     # demuestra que la lane este cableada a un fuzzer de verdad.
     grep -q 'stat::number_of_executed_units:' \
         "${output}/private_plain/fuzzer.raw.log"
+
+    # La lane r4_tn cuenta celdas. Exigir selected>0 la separa de "arranco y
+    # no exploto": sin telemetria configurada el proceso salia 86 en el primer
+    # input, y con ella pero sin alcanzar el decodificador saldria 0 sin haber
+    # medido nada.
+    if [[ "${lane}" == cmp_r4_tn ]]; then
+        test -s "${output}/telemetry/telemetry-job0.json"
+        python3 - "${output}/telemetry/telemetry-job0.json" <<'PY'
+import json, sys
+counters = json.load(open(sys.argv[1]))["counters"]
+selected = sum(counters["selected"].values())
+applied = sum(counters["applied"].values())
+if selected <= 0 or applied <= 0:
+    raise SystemExit(f"lane sin alcance: selected={selected} applied={applied}")
+print(f"R4TN_REACH selected={selected} applied={applied}")
+PY
+    fi
 done
 
 printf 'LOCAL_BUILD_SMOKE_PASS image=%s lanes=2\n' "${IMAGE}"
