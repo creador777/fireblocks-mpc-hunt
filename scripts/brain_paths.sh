@@ -106,6 +106,40 @@ parse_branch() {
     printf '%s %s %s %s\n' "${run_id}" "${attempt}" "${harness}" "${shard}"
 }
 
+# --- formato legado (solo lectura) ---------------------------------------
+# parse_branch_legacy BRANCH -> imprime "RUN_ID ATTEMPT HARNESS SHARD"
+#
+# Antes de las lanes las ramas no llevaban segmento de harness:
+#     ingest/run-<id>/attempt-<n>/shard-<k>
+# El brain conserva 203 ramas de esa epoca. El agregador falla cerrado ante
+# cualquier ref de ingest que no sepa interpretar -- correcto, porque saltarla
+# perderia corpus en silencio -- asi que sin esta funcion ninguna agregacion
+# vuelve a completarse.
+#
+# El harness se completa con cmp_ecdsa_online: era la unica superficie que
+# existia, y el CONTENIDO de esas ramas ya esta bajo corpus/cmp_ecdsa_online/,
+# asi que la comprobacion de rutas del agregador sigue siendo la real y no una
+# concesion. No hay generador legado: nada vuelve a escribir este formato, y
+# cada rama desaparece en cuanto se consolida.
+parse_branch_legacy() {
+    [[ "$#" -eq 1 ]] || return 64
+    local branch="$1"
+    [[ "${branch}" != *$'\n'* ]] || return 64
+    [[ "${branch}" != *' '* ]]   || return 64
+    [[ "${branch}" != *'..'* ]]  || return 64
+    git check-ref-format "refs/heads/${branch}" || return 64
+
+    local pattern='^ingest/run-([0-9]+)/attempt-([0-9]+)/shard-([0-9]+)$'
+    [[ "${branch}" =~ ${pattern} ]] || return 64
+    local run_id="${BASH_REMATCH[1]}" attempt="${BASH_REMATCH[2]}"
+    local shard="${BASH_REMATCH[3]}"
+    _brain_is_uint "${run_id}"  || return 64
+    _brain_is_uint "${attempt}" || return 64
+    _brain_is_uint "${shard}"   || return 64
+
+    printf '%s %s %s %s\n' "${run_id}" "${attempt}" cmp_ecdsa_online "${shard}"
+}
+
 # --- rutas derivadas ------------------------------------------------------
 # Corpus e incidentes salen del MISMO harness validado, nunca de una cadena
 # recibida aparte.
