@@ -69,10 +69,16 @@ RUN mkdir -p /opt/fireblocks/bin /opt/fireblocks/lib /opt/fireblocks/data \
       /build/harness/cmp_ecdsa_online/opus_test_extra_map_key \
  && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
       UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      /build/harness/cmp_ecdsa_online/opus_test_dual_session \
+      /opt/fireblocks/data/snapshot_tn.bin \
+ && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
       /build/harness/cmp_ecdsa_online/opus_cmp_smoke \
       /opt/fireblocks/data/snapshot.bin \
  && cp /build/opus_cmp_fuzzer /opt/fireblocks/bin/ \
  && cp /build/harness/cmp_ecdsa_online/opus_cmp_fuzzer_reachability_v2 \
+      /opt/fireblocks/bin/ \
+ && cp /build/harness/cmp_ecdsa_online/opus_cmp_fuzzer_dual \
       /opt/fireblocks/bin/ \
  && COSIGNER="$(find /build -name 'libcosigner.so' -type f -print -quit)" \
  && test -n "$COSIGNER" \
@@ -81,7 +87,9 @@ RUN mkdir -p /opt/fireblocks/bin /opt/fireblocks/lib /opt/fireblocks/data \
  && ! grep -q 'not found' /tmp/opus_cmp_fuzzer.ldd \
  && ldd /opt/fireblocks/bin/opus_cmp_fuzzer_reachability_v2 > /tmp/rt4.ldd \
  && ! grep -q 'not found' /tmp/rt4.ldd \
- && rm -f /tmp/opus_cmp_fuzzer.ldd /tmp/rt4.ldd
+ && ldd /opt/fireblocks/bin/opus_cmp_fuzzer_dual > /tmp/dual.ldd \
+ && ! grep -q 'not found' /tmp/dual.ldd \
+ && rm -f /tmp/opus_cmp_fuzzer.ldd /tmp/rt4.ldd /tmp/dual.ldd
 
 FROM ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a
 

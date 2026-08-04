@@ -41,7 +41,11 @@ case "${TUPLE}" in
     # Stage 0: canary and the legacy one-worker waves production already
     # admits. No manual authorization is consumed; tuple and expiry are
     # ignored completely on this path (the schedule never passes them).
-    1x1x300|1x1x3600|1x1x20700| \
+    #
+    # 1x1x900 es el micro-canary de una lane nueva. Entra en stage 0 porque es
+    # ESTRICTAMENTE menor que 1x1x3600, que ya estaba admitido: un shard, un
+    # worker y menos tiempo no pueden consumir mas que una tupla ya aprobada.
+    1x1x300|1x1x900|1x1x3600|1x1x20700| \
     5x1x300|5x1x3600|5x1x20700| \
     15x1x300|15x1x3600|15x1x20700| \
     25x1x300|25x1x3600|25x1x20700)

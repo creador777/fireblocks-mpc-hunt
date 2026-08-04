@@ -120,6 +120,11 @@ add_library(opus_telemetry_v2 STATIC
 )
 target_link_libraries(opus_telemetry_v2 PUBLIC opus_core)
 
+add_executable(opus_cmp_fuzzer_dual src/fuzzer_dual_session.cpp)
+target_compile_options(opus_cmp_fuzzer_dual PRIVATE -fsanitize=fuzzer)
+target_link_options(opus_cmp_fuzzer_dual PRIVATE -fsanitize=fuzzer)
+target_link_libraries(opus_cmp_fuzzer_dual PRIVATE opus_telemetry_v2)
+
 add_executable(opus_cmp_fuzzer_reachability_v2 src/fuzzer_reachability_v2.cpp)
 target_compile_options(opus_cmp_fuzzer_reachability_v2 PRIVATE -fsanitize=fuzzer)
 target_link_options(opus_cmp_fuzzer_reachability_v2 PRIVATE -fsanitize=fuzzer)
