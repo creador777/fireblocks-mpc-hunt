@@ -48,6 +48,14 @@ struct run_config
     // all-malicious case is explicitly out of scope (SECURITY-MODEL 1.1).
     std::set<uint64_t> malicious_ids;
 
+    // Fixture players that actually sign (the ceremony players_ids passed to
+    // start_signing). EMPTY = every fixture player signs, the historical
+    // n-of-n behaviour. When non-empty it must contain exactly snapshot.t
+    // distinct fixture players; the driver fails closed (HARNESS_FAULT)
+    // before round 1 otherwise, mirroring the library's own check at
+    // cmp_ecdsa_online_signing_service.cpp:59.
+    std::vector<uint64_t> signers_ids;
+
     std::vector<mutation> mutations;
 
     uint64_t timeout_ms = 0;                // 0 = no budget enforced
@@ -107,6 +115,12 @@ private:
 // start_signing twice under the same seed and requires byte-identical wire
 // output. If libcrypto were statically absorbed into libcosigner.so, this is
 // the check that catches it. Returns false if determinism is not in force.
+// Codigo de etapa de la ultima sonda de RNG. LAB-ONLY, diagnostico.
+// Devuelve SIEMPRE uno de estos literales y nada mas: nunca un mensaje
+// de excepcion, un txid, una ruta, bytes ni transcript.
+//   none | snapshot_load | signer_selection | start_signing | rounds | verify
+const char* rng_probe_stage();
+
 bool rng_is_effective(const snapshot& snap, std::string& detail);
 
 } // namespace opus

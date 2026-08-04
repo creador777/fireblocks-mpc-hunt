@@ -20,21 +20,34 @@ RUN cmake -S /src/hunt -B /build \
 RUN mkdir -p /opt/fireblocks/bin /opt/fireblocks/lib /opt/fireblocks/data \
  && /build/harness/cmp_ecdsa_online/mk_snapshot \
       /opt/fireblocks/data/snapshot.bin 1 1 2 \
+ && /build/harness/cmp_ecdsa_online/mk_snapshot \
+      /opt/fireblocks/data/snapshot_tn.bin 1 --t 3 1 2 3 4 \
  && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
       UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
       /build/harness/cmp_ecdsa_online/opus_selftest \
       /opt/fireblocks/data/snapshot.bin \
  && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
       UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      /build/harness/cmp_ecdsa_online/opus_selftest \
+      /opt/fireblocks/data/snapshot_tn.bin \
+ && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      /build/harness/cmp_ecdsa_online/opus_test_extra_map_key \
+ && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
       /build/harness/cmp_ecdsa_online/opus_cmp_smoke \
       /opt/fireblocks/data/snapshot.bin \
  && cp /build/opus_cmp_fuzzer /opt/fireblocks/bin/ \
+ && cp /build/harness/cmp_ecdsa_online/opus_cmp_fuzzer_reachability_v2 \
+      /opt/fireblocks/bin/ \
  && COSIGNER="$(find /build -name 'libcosigner.so' -type f -print -quit)" \
  && test -n "$COSIGNER" \
  && cp "$COSIGNER" /opt/fireblocks/lib/libcosigner.so \
  && ldd /opt/fireblocks/bin/opus_cmp_fuzzer > /tmp/opus_cmp_fuzzer.ldd \
  && ! grep -q 'not found' /tmp/opus_cmp_fuzzer.ldd \
- && rm -f /tmp/opus_cmp_fuzzer.ldd
+ && ldd /opt/fireblocks/bin/opus_cmp_fuzzer_reachability_v2 > /tmp/rt4.ldd \
+ && ! grep -q 'not found' /tmp/rt4.ldd \
+ && rm -f /tmp/opus_cmp_fuzzer.ldd /tmp/rt4.ldd
 
 FROM ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a
 
@@ -45,6 +58,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/fireblocks /opt/fireblocks
+COPY docker/lane-entrypoint.sh /opt/fireblocks/bin/lane-entrypoint.sh
 
 ENV FIREBLOCKS_SNAPSHOT=/opt/fireblocks/data/snapshot.bin
 ENV LD_LIBRARY_PATH=/opt/fireblocks/lib
@@ -52,4 +66,6 @@ ENV LD_LIBRARY_PATH=/opt/fireblocks/lib
 LABEL org.opencontainers.image.source="https://github.com/creador777/fireblocks-mpc-hunt"
 LABEL org.opencontainers.image.description="Deterministic CMP ECDSA fuzzing harness"
 
-ENTRYPOINT ["/opt/fireblocks/bin/opus_cmp_fuzzer"]
+# El dispatcher elige binario y snapshot segun FIREBLOCKS_LANE. Sin esa
+# variable la lane es cmp_general, que es el binario y el snapshot de hoy.
+ENTRYPOINT ["/bin/sh", "/opt/fireblocks/bin/lane-entrypoint.sh"]

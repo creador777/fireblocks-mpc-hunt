@@ -23,10 +23,15 @@ RESULT_SCHEMA = "rt4.validation/1"
 MAX_DOCUMENT_BYTES = 1 << 20
 MAX_COUNTER = (1 << 63) - 1
 
+# Espejo exacto de CELLS en harness/cmp_ecdsa_online/src/telemetry_v2.cpp.
+# tests/test_harness_contract.py exige que coincidan: el harness emite una
+# clave por celda y este validador rechaza el documento entero si le sobra o
+# le falta una, asi que una copia desactualizada invalida telemetria correcta.
 CELL_KEYS = (
     "r1.mta_proofs[victim]|flip_bit",
     "r1.mta_proofs[victim]|zero",
     "r1.mta_proofs[victim]|truncate",
+    "r4.si|extra_map_key",
 )
 VERDICT_KEYS = (
     "CLEAN-SIGN",

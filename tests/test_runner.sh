@@ -41,7 +41,7 @@ expect_rc() {
     local actual
     set +e
     PATH="${BIN_ROOT}:${PATH}" FAKE_DOCKER_ARGS="${TMP}/docker.args" \
-        "${RUNNER}" "$@" >"${TMP}/public.out" 2>"${TMP}/public.err"
+        "${RUNNER}" "$@" cmp_general >"${TMP}/public.out" 2>"${TMP}/public.err"
     actual=$?
     set -e
     [[ "${actual}" -eq "${expected}" ]]
@@ -70,7 +70,7 @@ set +e
 PATH="${BIN_ROOT}:${PATH}" \
 FAKE_DOCKER_ARGS="${TMP}/docker.args" \
 FAKE_DOCKER_RC=77 \
-    "${RUNNER}" image 4 60 "${TMP}/corpus" "${TMP}/out-finding" \
+    "${RUNNER}" image 4 60 "${TMP}/corpus" "${TMP}/out-finding" cmp_general \
     >"${TMP}/public.out" 2>"${TMP}/public.err"
 RUN_RC=$?
 set -e

@@ -17,6 +17,11 @@ for value in "${RUN_ID}" "${ATTEMPT}" "${COUNT}"; do
 done
 (( COUNT == 1 || COUNT == 5 || COUNT == 15 || COUNT == 25 )) || exit 64
 
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# Misma autoridad que el publicador. El agregador NO interpreta rutas por
+# su cuenta: pregunta a quien las genero.
+. "${ROOT}/scripts/brain_paths.sh"
+
 TMP="$(mktemp -d)"
 cleanup() {
     [[ "${TMP}" == /tmp/* ]] && rm -rf -- "${TMP}"
@@ -38,9 +43,24 @@ git -C "${STAGE}" checkout -q -b corpus-pool FETCH_HEAD
 BASE="$(git -C "${STAGE}" rev-parse HEAD)"
 [[ -z "$(git -C "${STAGE}" status --porcelain=v1)" ]]
 
-for (( shard=0; shard<COUNT; shard++ )); do
-    branch="ingest/run-${RUN_ID}/attempt-${ATTEMPT}/shard-${shard}"
-    ref="refs/remotes/ingest/${shard}"
+# Se enumeran las ramas de ingesta REALES del remoto y se interpreta cada
+# una con parse_branch. Construir el nombre esperado a mano fue lo que
+# hizo que el agregador buscara una rama que el publicador ya no escribia.
+#
+# Una ref DENTRO de ingest/ que no case el formato canonico es
+# fail-closed: es corpus publicado que nadie sabe leer, y saltarsela lo
+# perderia en silencio. Las de fuera de ingest/ se ignoran.
+mapfile -t ALL_REFS < <(git -C "${STAGE}" ls-remote --heads origin \
+    'refs/heads/ingest/*' | awk '{print $2}' | sed 's|^refs/heads/||')
+declare -i matched=0
+for branch in "${ALL_REFS[@]}"; do
+    tuple="$(parse_branch "${branch}")" || exit 65
+    read -r b_run b_attempt b_harness b_shard <<<"${tuple}"
+    [[ "${b_run}" == "${RUN_ID}" && "${b_attempt}" == "${ATTEMPT}" ]] ||
+        continue
+    matched+=1
+    shard="${b_shard}"
+    ref="refs/remotes/ingest/${b_harness}-${b_shard}"
     git -C "${STAGE}" fetch -q --depth=1 origin \
         "refs/heads/${branch}:${ref}"
 
@@ -73,8 +93,11 @@ for (( shard=0; shard<COUNT; shard++ )); do
             [[ "${base_oid[${path}]}" == "${oid}" ]] || exit 65
             continue
         fi
-        if [[ "${path}" =~ ^corpus/cmp_ecdsa_online/([0-9a-f]{40})$ ]]; then
-            name="${BASH_REMATCH[1]}"
+        # Misma pregunta a la autoridad, no una regex paralela.
+        if [[ "${path}" == corpus/* ]]; then
+            name="${path##*/}"
+            [[ "${path}" == "$(corpus_unit_for "${b_harness}" \
+                "${name}")" ]] || exit 65
             candidate="${TMP}/candidate-${shard}-${name}"
             git -C "${STAGE}" cat-file blob "${oid}" > "${candidate}"
             [[ "$(sha1sum "${candidate}" | cut -d' ' -f1)" == "${name}" ]]
@@ -88,7 +111,8 @@ for (( shard=0; shard<COUNT; shard++ )); do
                 chmod 0644 "${target}"
                 git -C "${STAGE}" add -- "${path}"
             fi
-        elif [[ "${path}" =~ ^incidents/run-${RUN_ID}/attempt-${ATTEMPT}-shard-${shard}\.gpg$ ]]; then
+        elif [[ "${path}" == "$(incident_for "${RUN_ID}" "${ATTEMPT}" \
+            "${b_harness}" "${b_shard}")" ]]; then
             target="${STAGE}/${path}"
             [[ ! -e "${target}" ]]
             mkdir -p "$(dirname -- "${target}")"

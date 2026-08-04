@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 5 ]]; then
+if [[ "$#" -ne 6 ]]; then
     exit 64
 fi
 if [[ -z "${FIREBLOCKS_BRAIN_WRITE_TOKEN:-}" ]]; then
@@ -10,11 +10,18 @@ if [[ -z "${FIREBLOCKS_BRAIN_WRITE_TOKEN:-}" ]]; then
 fi
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# Autoridad UNICA de rutas. Este script no construye ninguna por su
+# cuenta: si lo hiciera, podria volver a divergir del agregador, que es
+# exactamente lo que rompio el canary del run 30868170486.
+. "${ROOT}/scripts/brain_paths.sh"
 CORPUS_INPUT="$1"
 BUNDLE_INPUT="$2"
 RUN_ID="$3"
 ATTEMPT="$4"
 SHARD="$5"
+# La lane es la entrada; el harness se deriva. Nunca se aceptan juntos.
+LANE="$6"
+HARNESS="$(lane_to_harness "${LANE}")" || exit 64
 
 for value in "${RUN_ID}" "${ATTEMPT}" "${SHARD}"; do
     [[ "${value}" =~ ^[0-9]+$ ]] || exit 64
@@ -64,7 +71,8 @@ git -C "${STAGE}" fetch -q --depth=1 origin corpus-pool
 git -C "${STAGE}" checkout -q -b candidate FETCH_HEAD
 [[ -z "$(git -C "${STAGE}" status --porcelain=v1)" ]]
 
-DESTINATION="${STAGE}/corpus/cmp_ecdsa_online"
+CORPUS_REL="$(corpus_dir_for "${HARNESS}")" || exit 64
+DESTINATION="${STAGE}/${CORPUS_REL}"
 mkdir -p "${DESTINATION}"
 while IFS= read -r -d '' source; do
     name="$(basename -- "${source}")"
@@ -75,23 +83,30 @@ while IFS= read -r -d '' source; do
     else
         cp -- "${source}" "${target}"
         chmod 0644 "${target}"
-        git -C "${STAGE}" add -- "corpus/cmp_ecdsa_online/${name}"
+        unit_rel="$(corpus_unit_for "${HARNESS}" "${name}")" || exit 65
+        git -C "${STAGE}" add -- "${unit_rel}"
     fi
 done < <(find "${TMP}/validated" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
 
-INCIDENT_DIRECTORY="${STAGE}/incidents/run-${RUN_ID}"
-INCIDENT_NAME="attempt-${ATTEMPT}-shard-${SHARD}.gpg"
-mkdir -p "${INCIDENT_DIRECTORY}"
-[[ ! -e "${INCIDENT_DIRECTORY}/${INCIDENT_NAME}" ]]
-cp -- "${BUNDLE_FILE}" "${INCIDENT_DIRECTORY}/${INCIDENT_NAME}"
-chmod 0644 "${INCIDENT_DIRECTORY}/${INCIDENT_NAME}"
-git -C "${STAGE}" add -- "incidents/run-${RUN_ID}/${INCIDENT_NAME}"
+INCIDENT_REL="$(incident_for "${RUN_ID}" "${ATTEMPT}" "${HARNESS}" \
+    "${SHARD}")" || exit 64
+mkdir -p "${STAGE}/$(dirname -- "${INCIDENT_REL}")"
+[[ ! -e "${STAGE}/${INCIDENT_REL}" ]]
+cp -- "${BUNDLE_FILE}" "${STAGE}/${INCIDENT_REL}"
+chmod 0644 "${STAGE}/${INCIDENT_REL}"
+git -C "${STAGE}" add -- "${INCIDENT_REL}"
 
 git -C "${STAGE}" diff --cached --quiet --diff-filter=DR
 while IFS=$'\t' read -r status path; do
     [[ "${status}" == "A" ]]
-    [[ "${path}" =~ ^corpus/cmp_ecdsa_online/[0-9a-f]{40}$ ||
-       "${path}" =~ ^incidents/run-[0-9]+/attempt-[0-9]+-shard-[0-9]+\.gpg$ ]]
+    # Sin regex propia: se pregunta a la autoridad si la ruta es una que
+    # ella misma habria generado.
+    if [[ "${path}" == corpus/* ]]; then
+        [[ "${path}" == "$(corpus_unit_for "${HARNESS}" \
+            "${path##*/}")" ]]
+    else
+        parse_incident "${path}" > /dev/null
+    fi
 done < <(git -C "${STAGE}" diff --cached --name-status --no-renames)
 ! git -C "${STAGE}" diff --cached --quiet
 
@@ -99,5 +114,6 @@ git -C "${STAGE}" -c user.name=fireblocks-hunt \
     -c user.email=noreply@invalid commit -q -m \
     "ingest run ${RUN_ID} attempt ${ATTEMPT} shard ${SHARD}"
 
-BRANCH="ingest/run-${RUN_ID}/attempt-${ATTEMPT}/shard-${SHARD}"
+BRANCH="$(branch_for "${RUN_ID}" "${ATTEMPT}" "${HARNESS}" "${SHARD}")" ||
+    exit 64
 git -C "${STAGE}" push -q origin "HEAD:refs/heads/${BRANCH}"

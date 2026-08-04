@@ -1,6 +1,8 @@
 ﻿#include "opus/mutators.h"
 
+#include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <sstream>
 
 using namespace fireblocks::common::cosigner;
@@ -207,15 +209,53 @@ bool apply_r3(const mutation& m,
 
 bool apply_r4(const mutation& m,
               std::map<uint64_t, std::vector<elliptic_curve_scalar>>& sis,
-              uint64_t victim)
+              uint64_t victim,
+              const std::vector<uint64_t>& fixture_player_ids,
+              const std::vector<uint64_t>& signer_ids)
 {
     (void)victim;
     if (m.round != 4 || !m.enabled())
         return false;
+    if (m.field != wire_field::R4_SI)
+        return false;
+
+    if (m.op == wire_op::EXTRA_MAP_KEY) {
+        // The extra entry is attributed to a fixture player that is NOT a
+        // signer. Both id sets are CALLER-supplied fixture context, never
+        // wire bytes. Sorted copies so the caller need not guarantee order.
+        std::vector<uint64_t> players_sorted = fixture_player_ids;
+        std::vector<uint64_t> signers_sorted = signer_ids;
+        std::sort(players_sorted.begin(), players_sorted.end());
+        std::sort(signers_sorted.begin(), signers_sorted.end());
+
+        std::vector<uint64_t> non_signers;
+        std::set_difference(players_sorted.begin(), players_sorted.end(),
+                            signers_sorted.begin(), signers_sorted.end(),
+                            std::back_inserter(non_signers));
+        if (non_signers.empty())
+            return false;      // t == n fixture: nothing to add; not applied
+        const uint64_t extra = non_signers.front();
+
+        // Defense in depth: `extra` is derived from fixture_player_ids, so
+        // membership holds by construction. Refuse anyway if it ever does not.
+        if (!std::binary_search(players_sorted.begin(), players_sorted.end(), extra))
+            return false;      // unknown player: refuse
+        if (sis.find(extra) != sis.end())
+            return false;      // collision: NEVER overwrite an existing entry
+
+        // Insert exactly one zero scalar. Existing entries are untouched, so
+        // the honest wire bytes are preserved byte-exactly. The consumer's
+        // signer-count guard (cmp_ecdsa_online_signing_service.cpp:437) is
+        // expected to reject the enlarged map; the selftest asserts that
+        // rejection end-to-end rather than assuming it.
+        std::vector<elliptic_curve_scalar> v(1);
+        memset(v[0].data, 0, sizeof(elliptic_curve256_scalar_t));
+        sis.emplace(extra, std::move(v));
+        return true;
+    }
+
     auto it = sis.find(m.attacker);
     if (it == sis.end() || m.block >= it->second.size())
-        return false;
-    if (m.field != wire_field::R4_SI)
         return false;
     return apply_to_scalar(m, it->second[m.block]);
 }

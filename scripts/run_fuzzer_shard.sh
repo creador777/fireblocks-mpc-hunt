@@ -2,8 +2,8 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 5 ]]; then
-    printf 'usage: %s IMAGE SHARD SECONDS CORPUS_DIR OUTPUT_DIR\n' "$0" >&2
+if [[ "$#" -ne 6 ]]; then
+    printf 'usage: %s IMAGE SHARD SECONDS CORPUS_DIR OUTPUT_DIR LANE\n' "$0" >&2
     exit 64
 fi
 
@@ -12,6 +12,15 @@ SHARD="$2"
 SECONDS_LIMIT="$3"
 CORPUS_INPUT="$4"
 OUTPUT_INPUT="$5"
+# La lane es la ENTRADA; el harness se deriva del mapping cerrado. No se
+# aceptan por separado: una combinacion incoherente publicaria corpus de
+# una superficie en el subarbol de la otra.
+LANE="$6"
+# Autoridad UNICA del mapping. Tener una segunda copia fue lo que
+# desincronizo generador y parser en el canary anterior.
+. "$(dirname -- "${BASH_SOURCE[0]}")/brain_paths.sh"
+HARNESS="$(lane_to_harness "${LANE}")" || exit 64
+[[ -n "${HARNESS}" ]] || exit 64
 
 if [[ ! "${SHARD}" =~ ^[0-9]+$ ]] || (( SHARD < 0 || SHARD >= 25 )); then
     exit 64
@@ -63,6 +72,24 @@ if [[ "${PRIVATE_LOGICAL}" != "${PRIVATE_DIR}" ]]; then
     exit 65
 fi
 
+# Telemetria de celdas. El harness r4_tn solo llama a configure() si
+# FIREBLOCKS_TELEMETRY_DIR viene definida; si no, record_case() devuelve
+# false en el primer input y el proceso sale 86 sin fuzzear ni un segundo.
+# Los dos directorios van FUERA de private_plain a proposito:
+# package_incident.py rechaza cualquier anidado ahi dentro, asi que meterlos
+# alli cambiaria un fallo del fuzzer por uno del empaquetado. El binario
+# general ignora estas variables.
+TELEMETRY_DIR="${OUTPUT_DIR}/telemetry"
+CLAIMS_DIR="${OUTPUT_DIR}/telemetry_claims"
+mkdir -p "${TELEMETRY_DIR}" "${CLAIMS_DIR}"
+for directory in "${TELEMETRY_DIR}" "${CLAIMS_DIR}"; do
+    if [[ ! -d "${directory}" || -L "${directory}" ]] ||
+       [[ "$(realpath -e -s -- "${directory}")" != \
+          "$(realpath -e -- "${directory}")" ]]; then
+        exit 65
+    fi
+done
+
 # From here on private_plain exists, so every failure still leaves exit_code
 # metadata. 64 = invalid invocation/config, 65 = invalid paths,
 # 69 = resource profile not satisfiable (never reused for bad paths).
@@ -73,9 +100,13 @@ fail_rc() {
 
 HOST_CORPUS="${CORPUS_DIR}"
 HOST_PRIVATE="${PRIVATE_DIR}"
+HOST_TELEMETRY="${TELEMETRY_DIR}"
+HOST_CLAIMS="${CLAIMS_DIR}"
 if command -v cygpath >/dev/null 2>&1; then
     HOST_CORPUS="$(cygpath -am "${CORPUS_DIR}")"
     HOST_PRIVATE="$(cygpath -am "${PRIVATE_DIR}")"
+    HOST_TELEMETRY="$(cygpath -am "${TELEMETRY_DIR}")"
+    HOST_CLAIMS="$(cygpath -am "${CLAIMS_DIR}")"
 fi
 
 RAW_LOG="${PRIVATE_DIR}/fuzzer.raw.log"
@@ -162,7 +193,13 @@ MSYS_NO_PATHCONV=1 timeout --signal=TERM --kill-after=15 "${WATCHDOG_SECONDS}" d
     --tmpfs /tmp:rw,nosuid,nodev,size=512m \
     --mount "type=bind,src=${HOST_CORPUS},dst=/work/corpus" \
     --mount "type=bind,src=${HOST_PRIVATE},dst=/work/private" \
+    --mount "type=bind,src=${HOST_TELEMETRY},dst=/work/telemetry" \
+    --mount "type=bind,src=${HOST_CLAIMS},dst=/work/telemetry_claims" \
     --env "FIREBLOCKS_SHARD_SEED=${SHARD}" \
+    --env "FIREBLOCKS_LANE=${LANE}" \
+    --env "FIREBLOCKS_TELEMETRY_DIR=/work/telemetry" \
+    --env "FIREBLOCKS_TELEMETRY_CONTROL_DIR=/work/telemetry_claims" \
+    --env "FIREBLOCKS_FORK_COUNT=${WORKERS}" \
     "${IMAGE}" \
     /work/corpus \
     "-max_total_time=${SECONDS_LIMIT}" \
@@ -209,5 +246,8 @@ fi
 set -e
 
 printf '%s\n' "${RC}" > "${PRIVATE_DIR}/exit_code"
+# El harness va al directorio privado para que el resumen y la
+# publicacion usen el DERIVADO, no uno suministrado aparte.
+printf '%s\n' "${HARNESS}" > "${PRIVATE_DIR}/harness"
 printf 'SHARD_RUN_COMPLETE shard=%s exit_code=%s\n' "${SHARD}" "${RC}"
 exit "${RC}"
