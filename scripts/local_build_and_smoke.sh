@@ -15,14 +15,25 @@ FIREBLOCKS_UPSTREAM_DIR="${SOURCE_UPSTREAM}" \
 
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "${TMP}"' EXIT
-mkdir -p "${TMP}/corpus" "${TMP}/output"
-printf 'CMPSEED00' > "${TMP}/corpus/seed"
+# Las DOS lanes se ejercitan, cada una con su corpus y su salida. El gate del
+# Dockerfile prueba los binarios, no el despacho: sin este bucle la superficie
+# r4_tn viajaria compilada y jamas ejecutada a traves del ENTRYPOINT, que es
+# exactamente como quedo el canary que fallo.
+for lane in cmp_general cmp_r4_tn; do
+    corpus="${TMP}/${lane}/corpus"
+    output="${TMP}/${lane}/output"
+    mkdir -p "${corpus}" "${output}"
+    printf 'CMPSEED00' > "${corpus}/seed"
 
-"${ROOT}/scripts/run_fuzzer_shard.sh" \
-    "${IMAGE}" 0 60 "${TMP}/corpus" "${TMP}/output"
+    "${ROOT}/scripts/run_fuzzer_shard.sh" \
+        "${IMAGE}" 0 60 "${corpus}" "${output}" "${lane}"
 
-test -s "${TMP}/output/private_plain/fuzzer.raw.log"
-test "$(tr -d '\r\n' < "${TMP}/output/private_plain/exit_code")" = "0"
-grep -q 'stat::number_of_executed_units:' \
-    "${TMP}/output/private_plain/fuzzer.raw.log"
-printf 'LOCAL_BUILD_SMOKE_PASS image=%s\n' "${IMAGE}"
+    test -s "${output}/private_plain/fuzzer.raw.log"
+    test "$(tr -d '\r\n' < "${output}/private_plain/exit_code")" = "0"
+    # Que haya ejecutado unidades: un ENTRYPOINT que arranca y sale limpio no
+    # demuestra que la lane este cableada a un fuzzer de verdad.
+    grep -q 'stat::number_of_executed_units:' \
+        "${output}/private_plain/fuzzer.raw.log"
+done
+
+printf 'LOCAL_BUILD_SMOKE_PASS image=%s lanes=2\n' "${IMAGE}"
