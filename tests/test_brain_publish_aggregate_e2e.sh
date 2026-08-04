@@ -39,7 +39,10 @@ OFFLINE_ENV=(https_proxy=http://127.0.0.1:1 http_proxy=http://127.0.0.1:1
 new_brain() { # nombre
     local d="${WORK}/$1"
     mkdir -p "${d}/home"
-    git init -q --bare --initial-branch=corpus-pool "${d}/pool.git"
+    # --initial-branch existe desde git 2.28; symbolic-ref funciona en
+    # cualquier version, y la imagen de CI puede traer una mas vieja.
+    git init -q --bare "${d}/pool.git"
+    git -C "${d}/pool.git" symbolic-ref HEAD refs/heads/corpus-pool
     # Identidad explicita: el banco no depende de que el entorno tenga una
     # global configurada. Sin esto, `git commit` falla con "empty ident name"
     # en cualquier CI limpio.
@@ -57,7 +60,8 @@ new_brain() { # nombre
 	allow = always
 EOF
     local seed="${d}/seed"
-    HOME="${d}/home" git init -q --initial-branch=corpus-pool "${seed}"
+    HOME="${d}/home" git init -q "${seed}"
+    HOME="${d}/home" git -C "${seed}" symbolic-ref HEAD refs/heads/corpus-pool
     printf 'synthetic brain fixture\n' > "${seed}/README.md"
     HOME="${d}/home" git -C "${seed}" add -A
     HOME="${d}/home" git -C "${seed}" commit -q --no-gpg-sign -m bootstrap
