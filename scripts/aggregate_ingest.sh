@@ -73,8 +73,13 @@ for (( shard=0; shard<COUNT; shard++ )); do
             [[ "${base_oid[${path}]}" == "${oid}" ]] || exit 65
             continue
         fi
-        if [[ "${path}" =~ ^corpus/cmp_ecdsa_online/([0-9a-f]{40})$ ]]; then
-            name="${BASH_REMATCH[1]}"
+        # Las dos superficies se consolidan en subarboles SEPARADOS. El
+        # patron nombra el harness explicitamente para que una unidad no
+        # pueda aterrizar en el subarbol de la otra lane.
+        if [[ "${path}" =~ ^corpus/(cmp_ecdsa_online|cmp_ecdsa_online_r4_tn)/[0-9a-f]{40}$ ]]; then
+            # [1] es el harness y [2] el hash: el patron gano un grupo
+            # al admitir las dos superficies.
+            name="${BASH_REMATCH[2]}"
             candidate="${TMP}/candidate-${shard}-${name}"
             git -C "${STAGE}" cat-file blob "${oid}" > "${candidate}"
             [[ "$(sha1sum "${candidate}" | cut -d' ' -f1)" == "${name}" ]]

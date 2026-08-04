@@ -123,8 +123,43 @@ run_result session::run(const run_config& cfg)
     // At least one honest party is a PRECONDITION of the whole threat model.
     // The all-malicious case is explicitly out of scope, so the harness refuses
     // to construct it rather than producing results that cannot be reported.
+
+    // Signer set (fixture t-of-n support). Empty signers_ids means every
+    // fixture player signs, the historical n-of-n. Anything else must satisfy
+    // the library's own caller contract -- start_signing requires exactly
+    // metadata.t signers (cmp_ecdsa_online_signing_service.cpp:59) -- or the
+    // run is a harness fault, never a finding.
+    std::vector<uint64_t> signers = cfg.signers_ids.empty() ? _ids : cfg.signers_ids;
+    if (signers.empty()) {
+        res.v = verdict::HARNESS_FAULT;
+        res.detail = "refused: no signers configured";
+        return res;
+    }
+    {
+        std::set<uint64_t> unique_signers(signers.begin(), signers.end());
+        if (unique_signers.size() != signers.size()) {
+            res.v = verdict::HARNESS_FAULT;
+            res.detail = "duplicate signer id in signers_ids";
+            return res;
+        }
+    }
+    for (uint64_t sid : signers) {
+        if (std::find(_ids.begin(), _ids.end(), sid) == _ids.end()) {
+            res.v = verdict::HARNESS_FAULT;
+            res.detail = "signer id " + std::to_string(sid) + " is not a fixture player";
+            return res;
+        }
+    }
+    if (signers.size() != static_cast<size_t>(_snap.t)) {
+        res.v = verdict::HARNESS_FAULT;
+        res.detail = "signer count " + std::to_string(signers.size()) +
+                     " != snapshot threshold " + std::to_string(_snap.t) +
+                     " (start_signing would reject)";
+        return res;
+    }
+
     std::vector<uint64_t> honest;
-    for (uint64_t id : _ids)
+    for (uint64_t id : signers)
         if (cfg.malicious_ids.find(id) == cfg.malicious_ids.end())
             honest.push_back(id);
 
@@ -170,9 +205,9 @@ run_result session::run(const run_config& cfg)
         data.blocks.push_back(std::move(blk));
     }
 
-    std::set<uint64_t> players_ids(_ids.begin(), _ids.end());
+    std::set<uint64_t> players_ids(signers.begin(), signers.end());
     std::set<std::string> players_str;
-    for (uint64_t id : _ids)
+    for (uint64_t id : signers)
         players_str.insert(std::to_string(id));
 
     const bool want_positive_r = (cfg.metadata_json == "positive_r");
@@ -198,7 +233,7 @@ run_result session::run(const run_config& cfg)
     // so every call gets a fresh vector.
     // =======================================================================
     std::map<uint64_t, std::vector<cmp_mta_request>> requests;
-    for (uint64_t id : _ids) {
+    for (uint64_t id : signers) {
         std::vector<cmp_mta_request> out;
         auto o = guarded([&] {
             players.at(id)->service.start_signing(_key_id, cfg.txid,
@@ -238,7 +273,7 @@ run_result session::run(const run_config& cfg)
     // Round 2 -- mta_response
     // =======================================================================
     std::map<uint64_t, cmp_mta_responses> responses;
-    for (uint64_t id : _ids) {
+    for (uint64_t id : signers) {
         auto in = view_r1(id);
         cmp_mta_responses out;
         auto o = guarded([&] {
@@ -273,7 +308,7 @@ run_result session::run(const run_config& cfg)
     // Round 3 -- mta_verify
     // =======================================================================
     std::map<uint64_t, std::vector<cmp_mta_deltas>> deltas;
-    for (uint64_t id : _ids) {
+    for (uint64_t id : signers) {
         auto in = view_r2(id);
         std::vector<cmp_mta_deltas> out;
         auto o = guarded([&] {
@@ -305,7 +340,7 @@ run_result session::run(const run_config& cfg)
     // Round 4 -- get_si
     // =======================================================================
     std::map<uint64_t, std::vector<elliptic_curve_scalar>> sis;
-    for (uint64_t id : _ids) {
+    for (uint64_t id : signers) {
         auto in = view_r3(id);
         std::vector<elliptic_curve_scalar> out;
         auto o = guarded([&] {
@@ -328,7 +363,7 @@ run_result session::run(const run_config& cfg)
         if (cfg.malicious_ids.count(viewer))
             return copy;
         if (const mutation* m = find_mut(4))
-            if (apply_r4(*m, copy, viewer))
+            if (apply_r4(*m, copy, viewer, _ids, signers))
                 ++res.mutations_applied;
         return copy;
     };
@@ -453,19 +488,40 @@ void flatten(const cmp_mta_request& r, std::string& out)
 
 } // namespace
 
+namespace {
+// Allowlist cerrada de etapas. Nada fuera de este conjunto puede salir.
+const char* g_rng_stage = "none";
+} // namespace
+
+const char* rng_probe_stage() { return g_rng_stage; }
+
 bool rng_is_effective(const snapshot& snap, std::string& detail)
 {
     detail.clear();
     silence_library_logging();
 
     const std::string key_id = "opus-rng-probe";
-    const auto ids = snap.player_ids();
+    auto ids = snap.player_ids();
+    g_rng_stage = "signer_selection";
     if (ids.empty()) { detail = "snapshot has no players"; return false; }
+    // The probe drives a real start_signing, which requires exactly metadata.t
+    // signers (cmp_ecdsa_online_signing_service.cpp:59). On a t < n fixture
+    // use the designated signer set: the first t ids, the same convention
+    // generate_snapshot uses for the aggregate public key.
+    // Los stores se construyen sobre TODOS los jugadores del snapshot:
+    // install_snapshot instala el material de cada uno, asi que recortar
+    // antes deja sin almacen a los que no firman y la instalacion falla.
+    // El recorte a t afecta SOLO al conjunto de firmantes, que es lo que
+    // start_signing exige (cmp_ecdsa_online_signing_service.cpp:59).
+    const std::vector<uint64_t> all_ids = ids;
+    if (static_cast<size_t>(snap.t) < ids.size())
+        ids.resize(snap.t);
 
     std::map<uint64_t, det_key_persistency> stores;
-    for (uint64_t id : ids)
+    for (uint64_t id : all_ids)
         stores[id];
     std::string err;
+    g_rng_stage = "snapshot_load";
     if (!install_snapshot(snap, key_id, stores, err)) {
         detail = "install_snapshot failed: " + err;
         return false;
@@ -492,9 +548,11 @@ bool rng_is_effective(const snapshot& snap, std::string& detail)
                                       static_cast<cosigner_sign_algorithm>(snap.algorithm),
                                       data, "", players_str, players_ids, out);
         } catch (const std::exception& e) {
+            g_rng_stage = "start_signing";
             detail = std::string("start_signing threw during the RNG probe: ") + e.what();
             return false;
         }
+        g_rng_stage = "rounds";
         if (out.size() != 1) { detail = "unexpected request count"; return false; }
         flat.clear();
         flatten(out[0], flat);
@@ -505,6 +563,7 @@ bool rng_is_effective(const snapshot& snap, std::string& detail)
     if (!one_shot(0xC0FFEEull, a)) return false;
     if (!one_shot(0xC0FFEEull, b)) return false;
     if (a != b) {
+        g_rng_stage = "verify";
         detail = "same seed produced different wire bytes -- the RAND_METHOD override is NOT "
                  "reaching the library (most likely libcrypto is statically linked into "
                  "libcosigner.so; check ldd/nm on the built .so)";
@@ -512,6 +571,7 @@ bool rng_is_effective(const snapshot& snap, std::string& detail)
     }
     if (!one_shot(0xBADC0DEull, c)) return false;
     if (a == c) {
+        g_rng_stage = "verify";
         detail = "different seeds produced identical wire bytes -- the RNG appears stuck";
         return false;
     }

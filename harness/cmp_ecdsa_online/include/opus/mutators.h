@@ -85,8 +85,19 @@ bool apply_r3(const mutation& m,
               std::map<uint64_t, std::vector<fireblocks::common::cosigner::cmp_mta_deltas>>& deltas,
               uint64_t victim);
 
+// EXTRA_MAP_KEY contract (round 4 only): insert exactly ONE si entry
+// attributed to a fixture player that is NOT a signer
+// (fixture_player_ids - signer_ids). The op never overwrites, reorders or
+// alters an existing entry: the honest wire bytes are preserved byte-exactly.
+// It returns false -- NOT applied -- when no non-signer exists (a t == n
+// fixture), when the selected id is already present in the map (collision),
+// or when the fixture context is inconsistent. block/byte_index/bit are
+// ignored by this op. `victim` is unused but kept for symmetry with the
+// other rounds.
 bool apply_r4(const mutation& m,
               std::map<uint64_t, std::vector<fireblocks::common::cosigner::elliptic_curve_scalar>>& sis,
-              uint64_t victim);
+              uint64_t victim,
+              const std::vector<uint64_t>& fixture_player_ids,
+              const std::vector<uint64_t>& signer_ids);
 
 } // namespace opus

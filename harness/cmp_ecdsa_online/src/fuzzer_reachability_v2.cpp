@@ -12,12 +12,14 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
 struct field_spec { int round; opus::wire_field field; bool byte_vector; };
-constexpr std::array<field_spec, 1> FIELDS_V2{{
+constexpr std::array<field_spec, 2> FIELDS_V2{{
     {1, opus::wire_field::R1_MTA_PROOFS_ENTRY, true},
+    {4, opus::wire_field::R4_SI, false},
 }};
 
 struct runtime_v2 {
@@ -64,6 +66,8 @@ const char* cell_key(const field_spec& f, opus::wire_op op)
         default: return "r1.mta_proofs[victim]|truncate";
         }
     }
+    if (f.field == opus::wire_field::R4_SI && op == opus::wire_op::EXTRA_MAP_KEY)
+        return "r4.si|extra_map_key";
     return "";
 }
 
@@ -89,9 +93,21 @@ extern "C" int LLVMFuzzerInitialize(int* argc, char*** argv)
 
     std::string rng_detail;
     if (!opus::rng_is_effective(rt.snap, rng_detail))
-        fail_closed("rng_not_effective");
+        {
+            std::fprintf(stderr, "FIREBLOCKS_RNG_PROBE_STAGE stage=%s\n",
+                         opus::rng_probe_stage());
+            std::fflush(stderr);
+            fail_closed("rng_not_effective");
+        }
+    // UNSUPPORTED_CONFIGURATION. Esta lane necesita al menos tres jugadores:
+    // con dos no hay forma de tener un firmante, un atacante y un no-firmante
+    // a la vez, que es lo que la superficie R4 exige. La combinacion se mide
+    // igual en d39ae6e, asi que no es una regresion: es una precondicion.
+    //
+    // Motivo PROPIO, distinto del invariante de ejecucion de mas abajo: los
+    // dos compartian "insufficient_players" y el triage no podia separarlos.
     if (rt.snap.players.size() < 3)
-        fail_closed("insufficient_players");
+        fail_closed("unsupported_fixture_players");
 
     if (const char* shard = std::getenv("FIREBLOCKS_SHARD_SEED"))
         rt.shard_seed = std::strtoull(shard, nullptr, 10);
@@ -113,7 +129,7 @@ extern "C" int LLVMFuzzerInitialize(int* argc, char*** argv)
         const char* control = std::getenv("FIREBLOCKS_TELEMETRY_CONTROL_DIR");
         const char* fc = std::getenv("FIREBLOCKS_FORK_COUNT");
         if (!control || !*control ||
-            !opus::telemetry_v2::configure(tdir, control, "v2-r4-canary",
+            !opus::telemetry_v2::configure(tdir, control, "v2-r4-extrakey",
                                            "clang", "asan+ubsan",
                                            fc ? std::atoi(fc) : 1))
             fail_closed("telemetry_config_invalid");
@@ -138,7 +154,16 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     const auto& players = rt.session->ids();
     if (players.size() < 2)
         fail_closed("insufficient_players");
-    const uint64_t attacker = players[data[2] % players.size()];
+
+    // For a t < n snapshot the ceremony runs with the designated signer set:
+    // the first t player ids, the same convention generate_snapshot uses for
+    // the aggregate public key. The attacker is always a ceremony
+    // participant; a fixture-only player has no wire presence to tamper from.
+    std::vector<uint64_t> signers;
+    if (static_cast<size_t>(rt.snap.t) < players.size())
+        signers.assign(players.begin(), players.begin() + rt.snap.t);
+    const std::vector<uint64_t>& participants = signers.empty() ? players : signers;
+    const uint64_t attacker = participants[data[2] % participants.size()];
 
     opus::wire_op operation;
     if (selected.byte_vector) {
@@ -158,6 +183,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     config.blocks = blocks;
     config.metadata_json = (data[4] & 1) ? "positive_r" : "";
     config.malicious_ids = {attacker};
+    config.signers_ids = signers;   // empty when the fixture is n-of-n
     config.timeout_ms = 30000;
 
     opus::mutation mutation;
@@ -181,6 +207,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     if (!opus::telemetry_v2::record_case(cell_key(selected, operation), true,
                                          opus::to_string(result.v)))
         fail_closed("telemetry_publish_failed");
+
+    // LAB-ONLY: solo el numero de ronda, un entero acotado. Nada mas.
+    std::fprintf(stderr, "FIREBLOCKS_ROUND verdict=%s round=%d\n",
+                 opus::to_string(result.v), result.failed_round);
+    std::fflush(stderr);
 
     switch (result.v) {
     case opus::verdict::CLEAN_REJECT:

@@ -114,10 +114,23 @@ class WorkflowPolicyTests(unittest.TestCase):
             for line in DOCKERFILE.splitlines()
             if "ldd /opt/fireblocks/bin/opus_cmp_fuzzer" in line
         ]
-        self.assertEqual(len(linkage_lines), 1)
-        self.assertIn("> /tmp/opus_cmp_fuzzer.ldd", linkage_lines[0])
-        self.assertIn("grep -q 'not found' /tmp/opus_cmp_fuzzer.ldd", DOCKERFILE)
-        self.assertIn("rm -f /tmp/opus_cmp_fuzzer.ldd", DOCKERFILE)
+        # Una linea por binario enlazado. No se fija el numero: lo que importa
+        # es que NINGUNA vuelque su salida a stdout, porque `ldd` imprime
+        # direcciones de carga. Cada una debe redirigir a un fichero propio,
+        # que despues se comprueba con grep y se borra.
+        self.assertGreaterEqual(len(linkage_lines), 1)
+        redirects = []
+        for line in linkage_lines:
+            self.assertIn(">", line, line.strip())
+            target = line.split(">", 1)[1].split()[0]
+            self.assertTrue(target.startswith("/tmp/"), target)
+            self.assertTrue(target.endswith(".ldd"), target)
+            redirects.append(target)
+        self.assertEqual(len(set(redirects)), len(redirects),
+                         "dos binarios comparten fichero de enlazado")
+        for target in redirects:
+            self.assertIn(f"grep -q 'not found' {target}", DOCKERFILE)
+            self.assertIn(target, DOCKERFILE[DOCKERFILE.index("rm -f"):])
 
     def test_12_two_hour_100_core_tuple_is_exact_and_fail_closed(self) -> None:
         def plan(count: str, workers: str, seconds: str, approved: str, until: str):

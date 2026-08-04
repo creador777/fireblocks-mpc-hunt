@@ -65,7 +65,8 @@ def validate_files(root: Path) -> list[Path]:
             info = entry.stat(follow_symlinks=False)
             if not stat.S_ISREG(info.st_mode):
                 raise PackageError("nested or non-regular evidence rejected")
-            if entry.name not in {"fuzzer.raw.log", "exit_code", "oom_killed"} and not ARTIFACT.fullmatch(entry.name):
+            if entry.name not in {"fuzzer.raw.log", "exit_code", "oom_killed",
+                                  "harness"} and not ARTIFACT.fullmatch(entry.name):
                 raise PackageError("unexpected evidence name")
             total += info.st_size
             if info.st_size > 64 * 1024 * 1024 or total > 128 * 1024 * 1024:

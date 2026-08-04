@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 5 ]]; then
+if [[ "$#" -ne 6 ]]; then
     exit 64
 fi
 if [[ -z "${FIREBLOCKS_BRAIN_WRITE_TOKEN:-}" ]]; then
@@ -15,6 +15,15 @@ BUNDLE_INPUT="$2"
 RUN_ID="$3"
 ATTEMPT="$4"
 SHARD="$5"
+# Sexto argumento: la SUPERFICIE. Cada lane escribe en su propio subarbol
+# de corpus y en su propio espacio de incidentes. Un corpus t<n dentro de
+# la lane n=n no es mas corpus: es otro fixture, y mezclarlos invalida
+# las dos superficies.
+HARNESS="$6"
+case "${HARNESS}" in
+    cmp_ecdsa_online|cmp_ecdsa_online_r4_tn) ;;
+    *) exit 64 ;;
+esac
 
 for value in "${RUN_ID}" "${ATTEMPT}" "${SHARD}"; do
     [[ "${value}" =~ ^[0-9]+$ ]] || exit 64
@@ -64,7 +73,7 @@ git -C "${STAGE}" fetch -q --depth=1 origin corpus-pool
 git -C "${STAGE}" checkout -q -b candidate FETCH_HEAD
 [[ -z "$(git -C "${STAGE}" status --porcelain=v1)" ]]
 
-DESTINATION="${STAGE}/corpus/cmp_ecdsa_online"
+DESTINATION="${STAGE}/corpus/${HARNESS}"
 mkdir -p "${DESTINATION}"
 while IFS= read -r -d '' source; do
     name="$(basename -- "${source}")"
@@ -75,12 +84,12 @@ while IFS= read -r -d '' source; do
     else
         cp -- "${source}" "${target}"
         chmod 0644 "${target}"
-        git -C "${STAGE}" add -- "corpus/cmp_ecdsa_online/${name}"
+        git -C "${STAGE}" add -- "corpus/${HARNESS}/${name}"
     fi
 done < <(find "${TMP}/validated" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
 
 INCIDENT_DIRECTORY="${STAGE}/incidents/run-${RUN_ID}"
-INCIDENT_NAME="attempt-${ATTEMPT}-shard-${SHARD}.gpg"
+INCIDENT_NAME="${HARNESS}-attempt-${ATTEMPT}-shard-${SHARD}.gpg"
 mkdir -p "${INCIDENT_DIRECTORY}"
 [[ ! -e "${INCIDENT_DIRECTORY}/${INCIDENT_NAME}" ]]
 cp -- "${BUNDLE_FILE}" "${INCIDENT_DIRECTORY}/${INCIDENT_NAME}"
@@ -90,7 +99,7 @@ git -C "${STAGE}" add -- "incidents/run-${RUN_ID}/${INCIDENT_NAME}"
 git -C "${STAGE}" diff --cached --quiet --diff-filter=DR
 while IFS=$'\t' read -r status path; do
     [[ "${status}" == "A" ]]
-    [[ "${path}" =~ ^corpus/cmp_ecdsa_online/[0-9a-f]{40}$ ||
+    [[ "${path}" =~ ^corpus/"${HARNESS}"/[0-9a-f]{40}$ ||
        "${path}" =~ ^incidents/run-[0-9]+/attempt-[0-9]+-shard-[0-9]+\.gpg$ ]]
 done < <(git -C "${STAGE}" diff --cached --name-status --no-renames)
 ! git -C "${STAGE}" diff --cached --quiet
@@ -99,5 +108,5 @@ git -C "${STAGE}" -c user.name=fireblocks-hunt \
     -c user.email=noreply@invalid commit -q -m \
     "ingest run ${RUN_ID} attempt ${ATTEMPT} shard ${SHARD}"
 
-BRANCH="ingest/run-${RUN_ID}/attempt-${ATTEMPT}/shard-${SHARD}"
+BRANCH="ingest/run-${RUN_ID}/attempt-${ATTEMPT}/${HARNESS}/shard-${SHARD}"
 git -C "${STAGE}" push -q origin "HEAD:refs/heads/${BRANCH}"

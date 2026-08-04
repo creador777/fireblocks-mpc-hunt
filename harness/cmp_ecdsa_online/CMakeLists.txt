@@ -87,6 +87,10 @@ target_link_libraries(mk_snapshot PRIVATE opus_core)
 add_executable(opus_selftest tests/selftest.cpp)
 target_link_libraries(opus_selftest PRIVATE opus_core)
 
+# Unit tests of the EXTRA_MAP_KEY mutation contract (no session required).
+add_executable(opus_test_extra_map_key tests/test_extra_map_key.cpp)
+target_link_libraries(opus_test_extra_map_key PRIVATE opus_core)
+
 # Case runner.
 add_executable(opus_cmp_harness src/main.cpp)
 target_link_libraries(opus_cmp_harness PRIVATE opus_core)
@@ -97,6 +101,7 @@ target_link_libraries(opus_cmp_smoke PRIVATE opus_core)
 
 enable_testing()
 add_test(NAME selftest COMMAND opus_selftest)
+add_test(NAME extra_map_key COMMAND opus_test_extra_map_key)
 
 # --------------------------------------------------------------------------
 # V2 candidate: SEPARATE binary, corpus and artifacts. The V1 fuzzer build
