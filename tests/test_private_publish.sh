@@ -52,7 +52,7 @@ test ! -e "${PRIVATE}"
 
 set +e
 "${ROOT}/scripts/publish_ingest.sh" \
-    "${CORPUS}" "${BUNDLE}" "${RUN_ID}" "${ATTEMPT}" "${SHARD}"
+    "${CORPUS}" "${BUNDLE}" "${RUN_ID}" "${ATTEMPT}" "${SHARD}" cmp_general
 NO_TOKEN_RC=$?
 set -e
 test "${NO_TOKEN_RC}" -eq 78
@@ -61,9 +61,15 @@ test -z "$(git --git-dir="${REMOTE}" for-each-ref \
 
 FIREBLOCKS_BRAIN_WRITE_TOKEN="${TOKEN}" \
     "${ROOT}/scripts/publish_ingest.sh" \
-    "${CORPUS}" "${BUNDLE}" "${RUN_ID}" "${ATTEMPT}" "${SHARD}"
+    "${CORPUS}" "${BUNDLE}" "${RUN_ID}" "${ATTEMPT}" "${SHARD}" cmp_general
 
-INGEST_REF="refs/heads/ingest/run-${RUN_ID}/attempt-${ATTEMPT}/shard-${SHARD}"
+# La ref esperada la genera la autoridad de rutas. Construirla a
+# mano aqui reintroduciria, dentro de un test, el mismo defecto que
+# rompio el canary: un segundo generador que puede divergir.
+. "${ROOT}/scripts/brain_paths.sh"
+HARNESS="$(lane_to_harness cmp_general)"
+INGEST_REF="refs/heads/$(branch_for "${RUN_ID}" "${ATTEMPT}" \
+    "${HARNESS}" "${SHARD}")"
 test -n "$(git --git-dir="${REMOTE}" rev-parse --verify "${INGEST_REF}")"
 INGEST_BEFORE="$(git --git-dir="${REMOTE}" rev-parse "${INGEST_REF}")"
 
@@ -72,16 +78,20 @@ mapfile -t INGEST_PATHS < <(
 )
 EXPECTED_INGEST=(
     "README.md"
-    "corpus/cmp_ecdsa_online/${VALID_NAME}"
-    "incidents/run-${RUN_ID}/attempt-${ATTEMPT}-shard-${SHARD}.gpg"
+    "$(corpus_unit_for "${HARNESS}" "${VALID_NAME}")"
+    "$(incident_for "${RUN_ID}" "${ATTEMPT}" "${HARNESS}" "${SHARD}")"
 )
 test "${INGEST_PATHS[*]}" = "${EXPECTED_INGEST[*]}"
 while read -r mode type _ path; do
     test "${type}" = blob
     test "${mode}" = 100644
+    # Las rutas permitidas las genera la autoridad. Escribirlas a mano aqui
+    # reintroduciria, dentro de un test, el defecto que rompio el canary: un
+    # segundo generador capaz de divergir del real.
     case "${path}" in
-        README.md|corpus/cmp_ecdsa_online/"${VALID_NAME}"|\
-incidents/run-"${RUN_ID}"/attempt-"${ATTEMPT}"-shard-"${SHARD}".gpg)
+        README.md|\
+"$(corpus_unit_for "${HARNESS}" "${VALID_NAME}")"|\
+"$(incident_for "${RUN_ID}" "${ATTEMPT}" "${HARNESS}" "${SHARD}")")
             ;;
         *)
             exit 1
@@ -97,16 +107,16 @@ POOL_REF="refs/heads/corpus-pool"
 POOL_AFTER="$(git --git-dir="${REMOTE}" rev-parse "${POOL_REF}")"
 test "${POOL_AFTER}" != "$(git -C "${SEED}" rev-parse HEAD)"
 test "$(git --git-dir="${REMOTE}" show \
-    "${POOL_REF}:corpus/cmp_ecdsa_online/${VALID_NAME}" | sha1sum | cut -d' ' -f1)" \
+    "${POOL_REF}:$(corpus_unit_for "${HARNESS}" "${VALID_NAME}")" | sha1sum | cut -d' ' -f1)" \
     = "${VALID_NAME}"
 test -n "$(git --git-dir="${REMOTE}" show \
-    "${POOL_REF}:incidents/run-${RUN_ID}/attempt-${ATTEMPT}-shard-${SHARD}.gpg" |
+    "${POOL_REF}:$(incident_for "${RUN_ID}" "${ATTEMPT}" "${HARNESS}" "${SHARD}")" |
     sha256sum | cut -d' ' -f1)"
 
 set +e
 FIREBLOCKS_BRAIN_WRITE_TOKEN="${TOKEN}" \
     "${ROOT}/scripts/publish_ingest.sh" \
-    "${CORPUS}" "${BUNDLE}" "${RUN_ID}" "${ATTEMPT}" "${SHARD}"
+    "${CORPUS}" "${BUNDLE}" "${RUN_ID}" "${ATTEMPT}" "${SHARD}" cmp_general
 COLLISION_RC=$?
 set -e
 test "${COLLISION_RC}" -ne 0
@@ -120,7 +130,7 @@ printf 'wrong content\n' > \
 set +e
 FIREBLOCKS_BRAIN_WRITE_TOKEN="${TOKEN}" \
     "${ROOT}/scripts/publish_ingest.sh" \
-    "${BAD_CORPUS}" "${BUNDLE}" 9002 1 0
+    "${BAD_CORPUS}" "${BUNDLE}" 9002 1 0 cmp_general
 BAD_HASH_RC=$?
 set -e
 test "${BAD_HASH_RC}" -ne 0
@@ -131,7 +141,7 @@ ln -s "${CORPUS}" "${LAB}/corpus-link"
 set +e
 FIREBLOCKS_BRAIN_WRITE_TOKEN="${TOKEN}" \
     "${ROOT}/scripts/publish_ingest.sh" \
-    "${LAB}/corpus-link" "${BUNDLE}" 9003 1 0
+    "${LAB}/corpus-link" "${BUNDLE}" 9003 1 0 cmp_general
 SYMLINK_RC=$?
 set -e
 test "${SYMLINK_RC}" -eq 65
