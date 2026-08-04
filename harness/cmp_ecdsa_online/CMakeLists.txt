@@ -63,6 +63,7 @@ add_library(opus_core STATIC
     src/fixtures.cpp
     src/snapshot.cpp
     src/driver.cpp
+    src/dual_session.cpp
     src/mutators.cpp
     src/oracles.cpp
 )
@@ -90,6 +91,11 @@ target_link_libraries(opus_selftest PRIVATE opus_core)
 # Unit tests of the EXTRA_MAP_KEY mutation contract (no session required).
 add_executable(opus_test_extra_map_key tests/test_extra_map_key.cpp)
 target_link_libraries(opus_test_extra_map_key PRIVATE opus_core)
+
+# Control del harness dual. Es una puerta, no un test mas: si dos ceremonias
+# validas no completan, no hay nada que fuzzear.
+add_executable(opus_test_dual_session tests/test_dual_session.cpp)
+target_link_libraries(opus_test_dual_session PRIVATE opus_core)
 
 # Case runner.
 add_executable(opus_cmp_harness src/main.cpp)
