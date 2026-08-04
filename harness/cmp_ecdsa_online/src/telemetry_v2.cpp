@@ -18,6 +18,10 @@ namespace {
 constexpr const char* CELLS[] = {
     "r1.mta_proofs[victim]|flip_bit", "r1.mta_proofs[victim]|zero",
     "r1.mta_proofs[victim]|truncate",
+    // Registrada por el parche extra_map_key: fuzzer_reachability_v2.cpp:70 la
+    // produce y record_case exige selected.count(key)==1, asi que sin esta
+    // linea el proceso muere en fail_closed(telemetry_publish_failed).
+    "r4.si|extra_map_key",
 };
 constexpr const char* VERDICTS[] = {
     "CLEAN-SIGN", "CLEAN-REJECT", "INVALID-SIGNATURE",

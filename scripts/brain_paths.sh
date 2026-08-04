@@ -21,7 +21,15 @@
 #                            sin signo, sin espacios
 #   harness                : exactamente uno de los dos allowlisted
 #   sin fallback: cualquier desviacion sale 64
-set -euo pipefail
+#
+# Este fichero se USA SOURCEADO. No fija `set -e`: hacerlo se lo impondria a
+# quien lo carga, y una funcion que devuelve 64 a proposito -- que es como
+# rechaza -- abortaria al llamador en vez de dejarle decidir. Los dos
+# consumidores de produccion fijan `set -euo pipefail` por su cuenta antes de
+# cargarlo, asi que no se relaja nada.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set -euo pipefail
+fi
 
 #: Superficies conocidas. Identica a HARNESSES de public_summary.py y a
 #: RULES["harness"] de emit_summary.py; tests/test_harness_contract.py exige

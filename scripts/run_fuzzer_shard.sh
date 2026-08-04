@@ -2,8 +2,8 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 5 ]]; then
-    printf 'usage: %s IMAGE SHARD SECONDS CORPUS_DIR OUTPUT_DIR\n' "$0" >&2
+if [[ "$#" -ne 6 ]]; then
+    printf 'usage: %s IMAGE SHARD SECONDS CORPUS_DIR OUTPUT_DIR LANE\n' "$0" >&2
     exit 64
 fi
 
@@ -12,6 +12,15 @@ SHARD="$2"
 SECONDS_LIMIT="$3"
 CORPUS_INPUT="$4"
 OUTPUT_INPUT="$5"
+# La lane es la ENTRADA; el harness se deriva del mapping cerrado. No se
+# aceptan por separado: una combinacion incoherente publicaria corpus de
+# una superficie en el subarbol de la otra.
+LANE="$6"
+# Autoridad UNICA del mapping. Tener una segunda copia fue lo que
+# desincronizo generador y parser en el canary anterior.
+. "$(dirname -- "${BASH_SOURCE[0]}")/brain_paths.sh"
+HARNESS="$(lane_to_harness "${LANE}")" || exit 64
+[[ -n "${HARNESS}" ]] || exit 64
 
 if [[ ! "${SHARD}" =~ ^[0-9]+$ ]] || (( SHARD < 0 || SHARD >= 25 )); then
     exit 64
@@ -163,6 +172,7 @@ MSYS_NO_PATHCONV=1 timeout --signal=TERM --kill-after=15 "${WATCHDOG_SECONDS}" d
     --mount "type=bind,src=${HOST_CORPUS},dst=/work/corpus" \
     --mount "type=bind,src=${HOST_PRIVATE},dst=/work/private" \
     --env "FIREBLOCKS_SHARD_SEED=${SHARD}" \
+    --env "FIREBLOCKS_LANE=${LANE}" \
     "${IMAGE}" \
     /work/corpus \
     "-max_total_time=${SECONDS_LIMIT}" \
@@ -209,5 +219,8 @@ fi
 set -e
 
 printf '%s\n' "${RC}" > "${PRIVATE_DIR}/exit_code"
+# El harness va al directorio privado para que el resumen y la
+# publicacion usen el DERIVADO, no uno suministrado aparte.
+printf '%s\n' "${HARNESS}" > "${PRIVATE_DIR}/harness"
 printf 'SHARD_RUN_COMPLETE shard=%s exit_code=%s\n' "${SHARD}" "${RC}"
 exit "${RC}"

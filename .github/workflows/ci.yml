@@ -124,6 +124,46 @@ jobs:
             fireblocks-mpc-hunt-tests:ci \
             /work/tests/test_private_publish.sh
 
+      - name: Brain path contract
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 1g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --entrypoint bash \
+            fireblocks-mpc-hunt-tests:ci \
+            /work/tests/test_brain_paths_contract.sh
+
+      - name: Publish and aggregate end to end against local bare remotes
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          # El flujo ENTERO, no cada mitad por su cuenta: el canary que
+          # introdujo las dos superficies fallo en la publicacion y ninguna
+          # prueba lo vio porque publish_ingest.sh solo se corria hasta el
+          # borde de la red.
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 1g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --entrypoint bash \
+            fireblocks-mpc-hunt-tests:ci \
+            /work/tests/test_brain_publish_aggregate_e2e.sh
+
       - name: Build pinned fuzzer and run synthetic smoke
         working-directory: hunt
         run: bash scripts/local_build_and_smoke.sh "${GITHUB_WORKSPACE}/upstream" fireblocks-mpc-hunt:ci
