@@ -39,6 +39,9 @@ CELL_KEYS = (
     "r1.mta_proofs[victim]|zero",
     "r1.mta_proofs[victim]|truncate",
     "r4.si|extra_map_key",
+    "dual.schedule|sequential",
+    "dual.schedule|blocked",
+    "dual.schedule|alternating",
 )
 VERDICT_KEYS = (
     "CLEAN-SIGN",

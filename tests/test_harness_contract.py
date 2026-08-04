@@ -29,7 +29,7 @@ LANE_ENTRYPOINT = ROOT / "docker" / "lane-entrypoint.sh"
 BRAIN_PATHS = ROOT / "scripts" / "brain_paths.sh"
 DOCKERFILE = ROOT / "docker" / "Dockerfile.fuzzer"
 
-EXPECTED = ("cmp_ecdsa_online", "cmp_ecdsa_online_r4_tn")
+EXPECTED = ("cmp_ecdsa_online", "cmp_ecdsa_online_r4_tn", "cmp_ecdsa_online_dual")
 
 
 def harnesses_from_producer() -> tuple[str, ...]:
@@ -76,7 +76,7 @@ class HarnessContractTests(unittest.TestCase):
 
     # -- (3) sólo los dos harness conocidos --------------------------------
 
-    def test_02_only_the_two_known_surfaces_are_accepted(self):
+    def test_02_only_the_known_surfaces_are_accepted(self):
         self.assertEqual(sorted(harnesses_from_producer()), sorted(EXPECTED))
         self.assertEqual(sorted(harnesses_from_emitter()), sorted(EXPECTED))
 
@@ -245,8 +245,11 @@ class HarnessContractTests(unittest.TestCase):
 
     def test_14_a_unit_cannot_cross_from_one_surface_to_the_other(self):
         """Se ejecuta la validación real: la ruta de una lane no vale en la otra."""
-        pattern = re.compile(
-            r"^corpus/(cmp_ecdsa_online|cmp_ecdsa_online_r4_tn)/[0-9a-f]{40}$")
+        # Derivada de EXPECTED, no escrita a mano: una lista fija aqui empieza
+        # a mentir en cuanto se añade una superficie, y este test dejaria de
+        # comprobar precisamente la nueva.
+        alternation = "|".join(re.escape(h) for h in EXPECTED)
+        pattern = re.compile(rf"^corpus/({alternation})/[0-9a-f]{{40}}$")
         digest = "a" * 40
         for harness in EXPECTED:
             self.assertTrue(pattern.match(f"corpus/{harness}/{digest}"))

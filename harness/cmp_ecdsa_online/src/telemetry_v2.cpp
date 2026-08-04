@@ -22,6 +22,12 @@ constexpr const char* CELLS[] = {
     // produce y record_case exige selected.count(key)==1, asi que sin esta
     // linea el proceso muere en fail_closed(telemetry_publish_failed).
     "r4.si|extra_map_key",
+    // Clases de schedule de la lane cmp_dual. Exactamente una por
+    // ejecucion decodificada, para que las ecuaciones del validador
+    // sigan cerrando igual que con las celdas de mutacion.
+    "dual.schedule|sequential",
+    "dual.schedule|blocked",
+    "dual.schedule|alternating",
 };
 constexpr const char* VERDICTS[] = {
     "CLEAN-SIGN", "CLEAN-REJECT", "INVALID-SIGNATURE",

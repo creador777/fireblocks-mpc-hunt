@@ -12,7 +12,8 @@ import sys
 
 #: Superficies conocidas. El harness identifica QUE se fuzzea; arm_id,
 #: aparte, identifica quien decidio el presupuesto.
-HARNESSES = ("cmp_ecdsa_online", "cmp_ecdsa_online_r4_tn")
+HARNESSES = ("cmp_ecdsa_online", "cmp_ecdsa_online_r4_tn",
+             "cmp_ecdsa_online_dual")
 # Segunda copia del allowlist de nombres de evidencia; la otra esta en
 # scripts/package_incident.py y tests/test_harness_contract.py exige que
 # coincidan. leak- faltaba en las dos: ASan detecta leaks, libFuzzer escribe
