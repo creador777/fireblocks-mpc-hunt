@@ -54,7 +54,14 @@ mapfile -t ALL_REFS < <(git -C "${STAGE}" ls-remote --heads origin \
     'refs/heads/ingest/*' | awk '{print $2}' | sed 's|^refs/heads/||')
 declare -i matched=0
 for branch in "${ALL_REFS[@]}"; do
-    tuple="$(parse_branch "${branch}")" || exit 65
+    # El brain conserva ramas anteriores a las lanes. Interpretarlas con el
+    # parser legado -- que tambien es cerrado -- las deja pasar el filtro de
+    # run/attempt de abajo, que es quien las descarta por ser de otras
+    # corridas. Sin esto ninguna agregacion vuelve a completarse: una sola
+    # ref vieja bastaba para cerrar la de hoy.
+    tuple="$(parse_branch "${branch}")" ||
+        tuple="$(parse_branch_legacy "${branch}")" ||
+        exit 65
     read -r b_run b_attempt b_harness b_shard <<<"${tuple}"
     [[ "${b_run}" == "${RUN_ID}" && "${b_attempt}" == "${ATTEMPT}" ]] ||
         continue
