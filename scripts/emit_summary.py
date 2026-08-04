@@ -16,9 +16,13 @@ RULES = {
     "exit_code": re.compile(r"(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\Z"),
     "sanitizer": re.compile(r"(?:none|asan|ubsan|msan|oracle|libfuzzer|multiple|tool)\Z"),
     "summary": re.compile(
+        # "leak" acompaña a leak- en el allowlist de artefactos: sin el, un
+        # leak detectado por ASan producia un resumen que este validador
+        # rechazaba, y el paso publico fallaba despues de haber gastado la
+        # corrida entera en encontrarlo.
         r"(?:no_finding|memory_safety|undefined_behavior|uninitialized_memory|"
-        r"oracle_violation|timeout|oom|slow_unit|crash_signal|multiple_signals|"
-        r"execution_failed|budget_exhausted|container_oom)\Z"
+        r"oracle_violation|timeout|oom|slow_unit|crash_signal|leak|"
+        r"multiple_signals|execution_failed|budget_exhausted|container_oom)\Z"
     ),
     "stack_normalized": re.compile(
         r"(?:none|[A-Za-z_~][A-Za-z0-9_:~<>]{0,127}"

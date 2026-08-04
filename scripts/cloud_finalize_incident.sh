@@ -19,8 +19,9 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 4 ]]; then
+if [[ "$#" -ne 4 && "$#" -ne 9 ]]; then
     printf 'usage: %s PRIVATE_PLAIN_DIR BUNDLE VALIDATE_OUTCOME SUMMARY_OUTCOME\n' "$0" >&2
+    printf '       %s ... TELEMETRY_DIR TELEMETRY_OUT RUN_ID ATTEMPT SHARD\n' "$0" >&2
     exit 64
 fi
 
@@ -28,10 +29,32 @@ PRIVATE_DIR="$1"
 BUNDLE="$2"
 VALIDATE_OUTCOME="$3"
 SUMMARY_OUTCOME="$4"
+TELEMETRY_DIR="${5-}"
+TELEMETRY_OUT="${6-}"
+RUN_ID="${7-}"
+ATTEMPT="${8-}"
+SHARD="${9-}"
 
 PACKAGER="scripts/package_incident.py"
 PUBLIC_KEY="keys/artifact-recipient.asc"
 FINGERPRINT="keys/artifact-recipient.fingerprint"
+
+# La superficie se LEE de la evidencia, no se recibe aparte: run_fuzzer_shard.sh
+# la escribio derivandola de la lane, y volver a pasarla como argumento abriria
+# la puerta a etiquetar los contadores de una superficie con el nombre de la
+# otra.
+HARNESS=""
+if [[ -f "${PRIVATE_DIR}/harness" && ! -L "${PRIVATE_DIR}/harness" ]]; then
+    HARNESS="$(tr -d '\r\n' < "${PRIVATE_DIR}/harness")"
+fi
+
+# Solo la superficie de alcance produce contadores; el fuzzer general no
+# llama a la telemetria. Exigirselos cerraria todas sus corridas.
+TELEMETRY_ARGS=()
+if [[ "$#" -eq 9 && "${HARNESS}" == "cmp_ecdsa_online_r4_tn" ]]; then
+    TELEMETRY_ARGS=("${TELEMETRY_DIR}" "${TELEMETRY_OUT}" \
+                    "${RUN_ID}" "${ATTEMPT}" "${SHARD}" "${HARNESS}")
+fi
 
 prior_ok=0
 if [[ "${VALIDATE_OUTCOME}" == "success" && "${SUMMARY_OUTCOME}" == "success" ]]; then
@@ -40,7 +63,8 @@ fi
 
 secured=0
 if [[ -d "${PRIVATE_DIR}" && ! -L "${PRIVATE_DIR}" ]]; then
-    if python3 "${PACKAGER}" "${PRIVATE_DIR}" "${PUBLIC_KEY}" "${FINGERPRINT}" "${BUNDLE}" &&
+    if python3 "${PACKAGER}" "${PRIVATE_DIR}" "${PUBLIC_KEY}" "${FINGERPRINT}" \
+           "${BUNDLE}" ${TELEMETRY_ARGS[@]+"${TELEMETRY_ARGS[@]}"} &&
        [[ -s "${BUNDLE}" && ! -L "${BUNDLE}" ]] && [[ ! -e "${PRIVATE_DIR}" ]]; then
         secured=1
     else

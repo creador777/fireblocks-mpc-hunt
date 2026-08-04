@@ -1,0 +1,103 @@
+name: build-base-image
+
+# Construye la imagen del fuzzer UNA vez y la publica fijada por digest, para
+# que los shards de una ola la descarguen en vez de reconstruirla.
+#
+# POR QUE. Hoy cada shard corre el mismo `docker build`, incluido el
+# `apt-get install` completo. En la ola 30920052560 los mirrors de Ubuntu
+# rechazaron conexiones durante un par de minutos y se perdieron 6 de 15
+# shards: el fallo se multiplica por el tamaño de la ola, y los reintentos del
+# Dockerfile solo reducen la probabilidad, no la dependencia. Construyendo una
+# sola vez, una ola de 25 shards pasa de 25 ventanas de exposicion a una.
+#
+# ESTADO: preparado, no conectado. hunt.yml sigue construyendo por shard hasta
+# que docker/BASE_IMAGE.lock tenga un digest y se apruebe el cambio; asi este
+# workflow puede validarse sin tocar la produccion que ahora mismo esta
+# cazando.
+#
+# El consumidor NUNCA resuelve por etiqueta: lee el digest del lock y hace pull
+# por digest. Una etiqueta puede reapuntarse; un digest no.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Escribir "build" para construir y publicar la imagen base
+        required: true
+        default: select_action
+        type: choice
+        options:
+          - select_action
+          - build
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: fireblocks-base-image
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    if: ${{ inputs.confirm == 'build' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout hunt without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: hunt
+
+      - name: Checkout pinned upstream without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: fireblocks/mpc-lib
+          persist-credentials: false
+          path: upstream
+          fetch-depth: 0
+
+      - name: Pin upstream to the locked commit
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          commit="$(awk -F= '$1=="commit" {print $2}' UPSTREAM.lock)"
+          [[ "${commit}" =~ ^[0-9a-f]{40}$ ]]
+          git -C "${GITHUB_WORKSPACE}/upstream" checkout -q "${commit}"
+          test -z "$(git -C "${GITHUB_WORKSPACE}/upstream" status --porcelain=v1)"
+
+      - name: Build the image once
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          FIREBLOCKS_UPSTREAM_DIR="${GITHUB_WORKSPACE}/upstream" \
+            bash scripts/build_fuzzer_image.sh fireblocks-mpc-hunt:base
+
+      - name: Log in to the container registry
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Push and record the digest
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          commit="$(awk -F= '$1=="commit" {print $2}' UPSTREAM.lock)"
+          repository="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fireblocks-mpc-hunt"
+          docker tag fireblocks-mpc-hunt:base "${repository}:${commit:0:12}"
+          docker push "${repository}:${commit:0:12}"
+          # El digest del REGISTRO, que es el que los shards pueden traerse.
+          # El Id local no sirve: identifica la imagen desempaquetada, no el
+          # manifiesto que resuelve un pull.
+          digest="$(docker image inspect "${repository}:${commit:0:12}" \
+            --format '{{index .RepoDigests 0}}')"
+          [[ "${digest}" == *@sha256:* ]]
+          printf 'BASE_IMAGE_PUBLISHED reference=%s\n' "${digest}"
+          printf 'Actualiza docker/BASE_IMAGE.lock con:\n  reference=%s\n' \
+            "${digest}" >> "${GITHUB_STEP_SUMMARY}"

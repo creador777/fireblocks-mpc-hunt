@@ -30,11 +30,31 @@ git -C "${UPSTREAM}" archive --format=tar "${value[commit]}" |
 printf '%s\n' "${value[commit]}" > "${EXPORT}/.pinned-commit"
 
 IMAGE="${1:-fireblocks-mpc-hunt:${value[commit]:0:12}}"
+BUILD_LOG="${EXPORT}/build.log"
+set +e
 docker build \
     --build-context "upstream=${EXPORT}" \
     --file "${ROOT}/docker/Dockerfile.fuzzer" \
     --tag "${IMAGE}" \
-    "${ROOT}"
+    --progress plain \
+    "${ROOT}" 2>&1 | tee "${BUILD_LOG}"
+BUILD_RC="${PIPESTATUS[0]}"
+set -e
+
+if (( BUILD_RC != 0 )); then
+    # Distinguir "los mirrors no responden" de "el codigo no compila" importa
+    # para operar: lo primero se reintenta mas tarde y no dice nada del arbol;
+    # lo segundo es un fallo real que hay que arreglar. Sin esta linea las dos
+    # cosas se leen igual en el log de la ola.
+    if grep -q 'BUILD_NETWORK_FAILURE' "${BUILD_LOG}" ||
+       grep -qE 'Could not (connect|resolve)|Connection failed|Temporary failure resolving' \
+            "${BUILD_LOG}"; then
+        printf 'BUILD_NETWORK_FAILURE image=%s rc=%s\n' "${IMAGE}" "${BUILD_RC}" >&2
+        exit 75
+    fi
+    printf 'BUILD_FAILURE image=%s rc=%s\n' "${IMAGE}" "${BUILD_RC}" >&2
+    exit "${BUILD_RC}"
+fi
 
 DIGEST="$(docker image inspect "${IMAGE}" --format '{{.Id}}')"
 [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]

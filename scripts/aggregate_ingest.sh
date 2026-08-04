@@ -118,6 +118,20 @@ for branch in "${ALL_REFS[@]}"; do
                 chmod 0644 "${target}"
                 git -C "${STAGE}" add -- "${path}"
             fi
+        elif [[ "${path}" == "$(telemetry_for "${RUN_ID}" "${ATTEMPT}" \
+            "${b_harness}" "${b_shard}")" ]]; then
+            # Contadores saneados: mismo trato que el incidente -- una sola
+            # escritura, nunca sobre algo existente -- pero sin cifrar, porque
+            # el brain es privado y consultarlos no debe exigir la clave.
+            target="${STAGE}/${path}"
+            [[ ! -e "${target}" ]]
+            mkdir -p "$(dirname -- "${target}")"
+            git -C "${STAGE}" cat-file blob "${oid}" > "${target}"
+            [[ -s "${target}" && ! -L "${target}" ]]
+            python3 "${ROOT}/scripts/telemetry_evidence.py" --check \
+                "${target}" "${RUN_ID}" "${ATTEMPT}" "${b_shard}" "${b_harness}"
+            chmod 0644 "${target}"
+            git -C "${STAGE}" add -- "${path}"
         elif [[ "${path}" == "$(incident_for "${RUN_ID}" "${ATTEMPT}" \
             "${b_harness}" "${b_shard}")" ]]; then
             target="${STAGE}/${path}"

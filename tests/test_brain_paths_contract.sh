@@ -56,6 +56,29 @@ for tuple in "100 1 cmp_ecdsa_online 0" \
     check "branch_for(parse(b)) == b" $? "-> ${again}"
 done
 
+# Telemetria: mismo generador, misma inversa, y disjunta de las otras rutas.
+for tuple in "100 1 cmp_ecdsa_online 0" "9 3 cmp_ecdsa_online_r4_tn 12"; do
+    set -- ${tuple}
+    path="$(telemetry_for "$1" "$2" "$3" "$4")"
+    check "telemetry_for ${tuple}" $?
+    [[ "$(parse_telemetry "${path}")" == "$1 $2 $3 $4" ]]
+    check "parse_telemetry round-trip" $? "${path}"
+    [[ "${path}" != "$(incident_for "$1" "$2" "$3" "$4")" ]]
+    check "telemetria e incidente no colisionan" $?
+done
+
+for bad in \
+    'telemetry/run-007/cmp_ecdsa_online-attempt-1-shard-0.json' \
+    'telemetry/run-1/cmp_ecdsa_offline-attempt-1-shard-0.json' \
+    'telemetry/run-1/cmp_ecdsa_online-attempt-1-shard-0.gpg' \
+    'telemetry/run-1/cmp_ecdsa_online-attempt-1-shard-0.json/x' \
+    'incidents/run-1/cmp_ecdsa_online-attempt-1-shard-0.json'
+do
+    parse_telemetry "${bad}" >/dev/null 2>&1
+    [[ "$?" -ne 0 ]]
+    check "parse_telemetry rechaza: ${bad}" $?
+done
+
 # Lo mismo para incidentes: mismo generador, misma inversa.
 for tuple in "100 1 cmp_ecdsa_online 0" "9 3 cmp_ecdsa_online_r4_tn 12"; do
     set -- ${tuple}

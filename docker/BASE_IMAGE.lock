@@ -1,0 +1,11 @@
+# Imagen del fuzzer construida UNA vez y fijada por digest.
+#
+# Mientras reference sea el centinela, cada shard construye su propia imagen
+# (comportamiento actual). Cuando .github/workflows/build-base-image.yml
+# publique una imagen, se pega aqui la referencia con @sha256: que imprime y
+# scripts/resolve_fuzzer_image.sh empieza a resolverla por descarga.
+#
+# Siempre con digest, nunca con etiqueta: una etiqueta puede reapuntarse
+# despues de haberse auditado, y entonces los shards ejecutarian una imagen
+# que nadie reviso.
+reference=unpinned

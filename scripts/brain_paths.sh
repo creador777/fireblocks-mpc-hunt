@@ -168,6 +168,35 @@ incident_for() {
         "${run_id}" "${harness}" "${attempt}" "${shard}"
 }
 
+# Contadores saneados, separados por run / shard / superficie. El id de build
+# viaja DENTRO del documento: meterlo en la ruta obligaria a validarlo como
+# nombre de fichero y a reescribir el arbol cada vez que cambie el build.
+# telemetry_for RUN_ID ATTEMPT HARNESS SHARD
+telemetry_for() {
+    [[ "$#" -eq 4 ]] || return 64
+    local run_id="$1" attempt="$2" harness="$3" shard="$4"
+    _brain_is_uint "${run_id}"  || return 64
+    _brain_is_uint "${attempt}" || return 64
+    _brain_is_uint "${shard}"   || return 64
+    _brain_is_harness "${harness}" || return 64
+    printf 'telemetry/run-%s/%s-attempt-%s-shard-%s.json\n' \
+        "${run_id}" "${harness}" "${attempt}" "${shard}"
+}
+
+parse_telemetry() {
+    [[ "$#" -eq 1 ]] || return 64
+    local path="$1"
+    local pattern='^telemetry/run-([0-9]+)/([a-z0-9_]+)-attempt-([0-9]+)-shard-([0-9]+)\.json$'
+    [[ "${path}" =~ ${pattern} ]] || return 64
+    local run_id="${BASH_REMATCH[1]}" harness="${BASH_REMATCH[2]}"
+    local attempt="${BASH_REMATCH[3]}" shard="${BASH_REMATCH[4]}"
+    _brain_is_uint "${run_id}"  || return 64
+    _brain_is_uint "${attempt}" || return 64
+    _brain_is_uint "${shard}"   || return 64
+    _brain_is_harness "${harness}" || return 64
+    printf '%s %s %s %s\n' "${run_id}" "${attempt}" "${harness}" "${shard}"
+}
+
 parse_incident() {
     [[ "$#" -eq 1 ]] || return 64
     local path="$1"
@@ -196,8 +225,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     [[ "$#" -ge 1 ]] || exit 64
     command="$1"; shift
     case "${command}" in
-        lane_to_harness|branch_for|parse_branch|corpus_dir_for|corpus_unit_for|\
-        incident_for|parse_incident|is_ingest_ref)
+        lane_to_harness|branch_for|parse_branch|parse_branch_legacy|\
+        corpus_dir_for|corpus_unit_for|incident_for|parse_incident|\
+        telemetry_for|parse_telemetry|is_ingest_ref)
             "${command}" "$@" ;;
         *) exit 64 ;;
     esac

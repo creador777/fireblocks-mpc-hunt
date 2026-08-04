@@ -299,10 +299,16 @@ jobs:
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
           bundle="${root}/upload/incident-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SHARD}.gpg"
+          # La telemetria del harness de alcance entra AQUI: se sanea una sola
+          # vez y los mismos bytes van al bundle cifrado y al fichero que se
+          # publica. Sin esto los contadores morian con el runner y una ola
+          # solo podia decir "no crasheo", nunca cuanto exploro.
           bash scripts/cloud_finalize_incident.sh \
             "${root}/output/private_plain" \
             "${bundle}" \
-            "${VALIDATE_OUTCOME}" "${SUMMARY_OUTCOME}"
+            "${VALIDATE_OUTCOME}" "${SUMMARY_OUTCOME}" \
+            "${root}/output/telemetry" "${root}/telemetry.json" \
+            "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" "${SHARD}"
           test ! -e "${root}/output/private_plain"
           test -s "${bundle}"
           test "$(find "${root}/upload" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 1
@@ -344,11 +350,20 @@ jobs:
           # subarbol de SU superficie y no pueden cruzarse con la otra lane.
           harness="$(bash scripts/brain_paths.sh lane_to_harness "${FIREBLOCKS_LANE}")"
           test -n "${harness}"
+          # Los contadores saneados solo existen en la superficie de alcance.
+          # Se pasan si el finalizador los produjo; publish_ingest.sh los
+          # revalida antes de escribir nada.
+          telemetry="${root}/telemetry.json"
+          if [[ -s "${telemetry}" ]]; then
+            set -- "${telemetry}"
+          else
+            set --
+          fi
           bash scripts/publish_ingest.sh \
             "${root}/corpus" \
             "${root}/upload/incident-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SHARD}.gpg" \
             "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" "${SHARD}" \
-            "${FIREBLOCKS_LANE}"
+            "${FIREBLOCKS_LANE}" "$@"
 
       - name: Emit only the seven-field public summary
         working-directory: hunt

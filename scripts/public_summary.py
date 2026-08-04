@@ -13,7 +13,12 @@ import sys
 #: Superficies conocidas. El harness identifica QUE se fuzzea; arm_id,
 #: aparte, identifica quien decidio el presupuesto.
 HARNESSES = ("cmp_ecdsa_online", "cmp_ecdsa_online_r4_tn")
-ARTIFACT = re.compile(r"(crash|timeout|oom|slow-unit)-[0-9a-f]{40}\Z")
+# Segunda copia del allowlist de nombres de evidencia; la otra esta en
+# scripts/package_incident.py y tests/test_harness_contract.py exige que
+# coincidan. leak- faltaba en las dos: ASan detecta leaks, libFuzzer escribe
+# leak-<sha1>, y este resumen fallaba cerrado con "unexpected artifact" antes
+# de que el finalizador llegara a cifrar nada. El hallazgo se perdia entero.
+ARTIFACT = re.compile(r"(crash|leak|timeout|oom|slow-unit)-[0-9a-f]{40}\Z")
 FRAME = re.compile(rb"#[0-9]+ +0x[0-9a-fA-F]+ +in +([A-Za-z_~][A-Za-z0-9_:~<>]{0,127})")
 # Frame allowlist fixed OUTSIDE the log: extracted from the fuzzer binary at
 # build time and versioned next to this script. A frame whose symbol is not
@@ -81,6 +86,8 @@ def classify(log: bytes, artifact_kind: str | None) -> tuple[str, str]:
         return "libfuzzer", "oom"
     if artifact_kind == "slow-unit":
         return "libfuzzer", "slow_unit"
+    if artifact_kind == "leak":
+        return "libfuzzer", "leak"
     if artifact_kind == "crash":
         return "libfuzzer", "crash_signal"
     return "none", "no_finding"
