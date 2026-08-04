@@ -2,7 +2,11 @@
 set -euo pipefail
 umask 077
 
-if [[ "$#" -ne 6 ]]; then
+# Siete argumentos cuando la corrida produjo contadores saneados. Van al brain
+# EN CLARO a proposito: el repositorio es privado, y tenerlos consultables sin
+# descifrar es justamente lo que permite responder "cuanto exploro esta ola"
+# sin abrir un solo incidente.
+if [[ "$#" -ne 6 && "$#" -ne 7 ]]; then
     exit 64
 fi
 if [[ -z "${FIREBLOCKS_BRAIN_WRITE_TOKEN:-}" ]]; then
@@ -21,6 +25,7 @@ ATTEMPT="$4"
 SHARD="$5"
 # La lane es la entrada; el harness se deriva. Nunca se aceptan juntos.
 LANE="$6"
+TELEMETRY_INPUT="${7-}"
 HARNESS="$(lane_to_harness "${LANE}")" || exit 64
 
 for value in "${RUN_ID}" "${ATTEMPT}" "${SHARD}"; do
@@ -96,6 +101,26 @@ cp -- "${BUNDLE_FILE}" "${STAGE}/${INCIDENT_REL}"
 chmod 0644 "${STAGE}/${INCIDENT_REL}"
 git -C "${STAGE}" add -- "${INCIDENT_REL}"
 
+if [[ -n "${TELEMETRY_INPUT}" ]]; then
+    [[ -f "${TELEMETRY_INPUT}" && ! -L "${TELEMETRY_INPUT}" ]] || exit 65
+    TELEMETRY_LOGICAL="$(realpath -e -s -- "${TELEMETRY_INPUT}")"
+    TELEMETRY_FILE="$(realpath -e -- "${TELEMETRY_INPUT}")"
+    [[ "${TELEMETRY_LOGICAL}" == "${TELEMETRY_FILE}" ]] || exit 65
+    # Se revalida aqui aunque package_incident.py ya lo produjo: este script
+    # publica, y publicar un documento que no pasa el saneo -- porque alguien
+    # lo toco entre pasos -- es exactamente lo que no puede ocurrir.
+    python3 "${ROOT}/scripts/telemetry_evidence.py" --check \
+        "${TELEMETRY_FILE}" "${RUN_ID}" "${ATTEMPT}" "${SHARD}" "${HARNESS}" ||
+        exit 65
+    TELEMETRY_REL="$(telemetry_for "${RUN_ID}" "${ATTEMPT}" "${HARNESS}" \
+        "${SHARD}")" || exit 64
+    mkdir -p "${STAGE}/$(dirname -- "${TELEMETRY_REL}")"
+    [[ ! -e "${STAGE}/${TELEMETRY_REL}" ]]
+    cp -- "${TELEMETRY_FILE}" "${STAGE}/${TELEMETRY_REL}"
+    chmod 0644 "${STAGE}/${TELEMETRY_REL}"
+    git -C "${STAGE}" add -- "${TELEMETRY_REL}"
+fi
+
 git -C "${STAGE}" diff --cached --quiet --diff-filter=DR
 while IFS=$'\t' read -r status path; do
     [[ "${status}" == "A" ]]
@@ -104,6 +129,8 @@ while IFS=$'\t' read -r status path; do
     if [[ "${path}" == corpus/* ]]; then
         [[ "${path}" == "$(corpus_unit_for "${HARNESS}" \
             "${path##*/}")" ]]
+    elif [[ "${path}" == telemetry/* ]]; then
+        parse_telemetry "${path}" > /dev/null
     else
         parse_incident "${path}" > /dev/null
     fi

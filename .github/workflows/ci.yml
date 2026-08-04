@@ -71,7 +71,9 @@ jobs:
             --entrypoint python3 \
             fireblocks-mpc-hunt-tests:ci \
             -m unittest -v tests.test_workflow_policy \
-            tests.test_cloud_window_workflow
+            tests.test_cloud_window_workflow \
+            tests.test_telemetry_evidence \
+            tests.test_harness_contract
           docker run --rm \
             --network none \
             --read-only \
@@ -83,7 +85,7 @@ jobs:
             --mount "type=bind,src=${PWD},dst=/work,readonly" \
             --entrypoint python3 \
             fireblocks-mpc-hunt-tests:ci \
-            -c "import pathlib,yaml; [yaml.safe_load(pathlib.Path(p).read_text()) for p in ['/work/.github/workflows/ci.yml','/work/.github/workflows/hunt.yml']]; print('YAML_PARSE_PASS files=2')"
+            -c "import pathlib,yaml; [yaml.safe_load(pathlib.Path(p).read_text()) for p in ['/work/.github/workflows/ci.yml','/work/.github/workflows/hunt.yml','/work/.github/workflows/build-base-image.yml']]; print('YAML_PARSE_PASS files=3')"
 
       - name: Runner fail-closed tests without network
         working-directory: hunt
@@ -163,6 +165,24 @@ jobs:
             --entrypoint bash \
             fireblocks-mpc-hunt-tests:ci \
             /work/tests/test_brain_publish_aggregate_e2e.sh
+
+      - name: Telemetry survives encryption, publication and aggregation
+        working-directory: hunt
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 1g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,exec,size=256m \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --entrypoint bash \
+            fireblocks-mpc-hunt-tests:ci \
+            /work/tests/test_telemetry_pipeline.sh
 
       - name: Build pinned fuzzer and run synthetic smoke
         working-directory: hunt

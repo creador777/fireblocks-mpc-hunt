@@ -256,6 +256,33 @@ class HarnessContractTests(unittest.TestCase):
                          f"corpus/{digest}"):
             self.assertIsNone(pattern.match(crossing), crossing)
 
+    def test_16_the_artifact_allowlist_agrees_across_its_copies(self):
+        """Los nombres que libFuzzer escribe se aceptan en las tres copias.
+
+        leak- faltaba en package_incident.py y en public_summary.py, y "leak"
+        faltaba en el vocabulario de emit_summary.py. ASan detecta leaks, asi
+        que un leak real habria hecho fallar el resumen y, con el, el cifrado:
+        cero bundle, cero upload, cero publicacion. El hallazgo se perdia
+        entero, que es exactamente el modo de fallo que este proyecto no puede
+        permitirse.
+        """
+        kinds = {"crash", "leak", "timeout", "oom", "slow-unit"}
+        for module in ("package_incident.py", "public_summary.py"):
+            body = (ROOT / "scripts" / module).read_text(encoding="utf-8")
+            declaration = re.search(r"^ARTIFACT\s*=\s*re\.compile\(r\"(.+)\"\)",
+                                    body, re.M)
+            self.assertIsNotNone(declaration, f"{module} no define ARTIFACT")
+            found = set(re.findall(r"[a-z][a-z-]+", declaration.group(1).split("-[")[0]))
+            self.assertEqual(found & kinds, kinds,
+                             f"{module} no acepta todos los artefactos")
+
+        # Y el veredicto que produce cada uno tiene que caber en el
+        # vocabulario publico, o el resumen se rechaza a si mismo.
+        emit = (ROOT / "scripts" / "emit_summary.py").read_text(encoding="utf-8")
+        for verdict in ("leak", "timeout", "oom", "slow_unit", "crash_signal"):
+            self.assertRegex(emit, rf"\|{verdict}\||\|{verdict}\)|\({verdict}\|",
+                             f"emit_summary.py no admite el resumen {verdict}")
+
     def test_15_the_cell_allowlist_agrees_with_the_harness(self):
         """CELLS del C++ y CELL_KEYS del validador son la misma lista.
 

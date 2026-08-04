@@ -2,10 +2,44 @@
 FROM ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates clang cmake git libssl-dev uuid-dev \
- && rm -rf /var/lib/apt/lists/*
+# Reintentos acotados con backoff. Una ola de 15 shards perdio 6 porque los
+# mirrors de Ubuntu rechazaron la conexion durante un par de minutos: cada
+# shard reconstruye la imagen, asi que un mirror caido borra capacidad
+# proporcional al tamaño de la ola.
+#
+# Los reintentos NO ocultan un fallo permanente: son cuatro intentos con
+# timeout propio y espera creciente, y si el ultimo falla el RUN sale distinto
+# de cero con el codigo real. Un paquete inexistente o un repositorio mal
+# configurado fallan igual de rapido que antes, solo que cuatro veces.
+#
+# La solucion definitiva es no reconstruir por shard: ver
+# .github/workflows/build-base-image.yml y docker/BASE_IMAGE.lock.
+#
+# Se reintenta el CICLO update+install, no cada comando por separado:
+# `apt-get update` devuelve 0 aunque no haya podido bajar un solo indice --
+# solo imprime "Some index files failed to download" -- asi que reintentarlo
+# aislado no arregla nada. Quien falla de verdad es el install, y para que su
+# reintento sirva hay que refrescar los indices antes.
+RUN set -eu; \
+    packages="build-essential ca-certificates clang cmake git libssl-dev uuid-dev"; \
+    attempt=1; \
+    while :; do \
+      if timeout 300 apt-get update -o Acquire::Retries=3 \
+         && timeout 600 apt-get install -y --no-install-recommends \
+              -o Acquire::Retries=3 ${packages}; then \
+        break; \
+      fi; \
+      status=$?; \
+      if [ "${attempt}" -ge 4 ]; then \
+        echo "BUILD_NETWORK_FAILURE stage=apt attempts=${attempt} status=${status}" >&2; \
+        exit "${status}"; \
+      fi; \
+      echo "apt cycle ${attempt} failed with ${status}, retrying" >&2; \
+      rm -rf /var/lib/apt/lists/*; \
+      sleep $(( attempt * 5 )); \
+      attempt=$(( attempt + 1 )); \
+    done; \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=upstream . /src/upstream
 COPY . /src/hunt
