@@ -64,6 +64,36 @@ struct ceremony_report
     std::string detail;
 };
 
+struct dual_oracle_observation
+{
+    bool both_completed = false;
+    bool signatures_observed = false;
+    bool signature_a_valid = false;
+    bool signature_b_valid = false;
+    bool cross_ab = false;
+    bool cross_ba = false;
+    bool messages_distinct = false;
+    bool nonce_equal = false;
+    bool other_records_unchanged = true;
+    bool rollback_a_clean = true;
+    bool rollback_b_clean = true;
+    bool key_stores_unchanged = true;
+    bool harness_fault = false;
+};
+
+struct dual_oracle_verdict
+{
+    bool signatures_valid = false;
+    bool cross_session_verification = false;
+    bool nonce_reuse = false;
+    bool state_isolation = true;
+    bool rollback_clean = true;
+    bool key_store_unchanged = true;
+    bool harness_fault = false;
+};
+
+dual_oracle_verdict evaluate_dual_oracles(const dual_oracle_observation& observation);
+
 struct dual_result
 {
     // --- progreso ---------------------------------------------------------
@@ -100,6 +130,10 @@ struct dual_result
                (both_completed && !signatures_valid);
     }
 };
+
+// Compares every semantic field and deliberately excludes elapsed_ms.
+bool semantic_equal(const ceremony_report& lhs, const ceremony_report& rhs);
+bool semantic_equal(const dual_result& lhs, const dual_result& rhs);
 
 // Mundo compartido por las dos ceremonias: un player_ctx por jugador, con su
 // platform_service y su store de firma. Que sea UNO solo es la premisa del

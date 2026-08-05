@@ -97,6 +97,9 @@ target_link_libraries(opus_test_extra_map_key PRIVATE opus_core)
 add_executable(opus_test_dual_session tests/test_dual_session.cpp)
 target_link_libraries(opus_test_dual_session PRIVATE opus_core)
 
+add_executable(opus_test_dual_oracle_calibration tests/test_dual_oracle_calibration.cpp)
+target_link_libraries(opus_test_dual_oracle_calibration PRIVATE opus_core)
+
 # Case runner.
 add_executable(opus_cmp_harness src/main.cpp)
 target_link_libraries(opus_cmp_harness PRIVATE opus_core)
@@ -108,6 +111,7 @@ target_link_libraries(opus_cmp_smoke PRIVATE opus_core)
 enable_testing()
 add_test(NAME selftest COMMAND opus_selftest)
 add_test(NAME extra_map_key COMMAND opus_test_extra_map_key)
+add_test(NAME dual_oracle_calibration COMMAND opus_test_dual_oracle_calibration)
 
 # --------------------------------------------------------------------------
 # V2 candidate: SEPARATE binary, corpus and artifacts. The V1 fuzzer build

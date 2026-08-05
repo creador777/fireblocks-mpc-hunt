@@ -95,14 +95,31 @@ int main(int argc, char** argv)
         check("intercalado: rollback limpio", r.rollback_clean);
     }
 
-    // --- 3. determinismo: mismo seed y schedule, mismo resultado ------------
+    // --- 3. determinismo: todos los campos semanticos, nunca el reloj -------
     {
         std::vector<uint8_t> s{0, 1, 1, 0, 0, 1, 0, 1, 1, 0};
         const opus::dual_result first = dual.run(7, s);
-        const opus::dual_result second = dual.run(7, s);
-        check("determinista: mismo progreso", first.max_round_reached == second.max_round_reached);
-        check("determinista: misma traza", first.schedule == second.schedule);
-        check("determinista: mismo veredicto", first.both_completed == second.both_completed);
+        for (int repeat = 0; repeat < 5; ++repeat) {
+            const opus::dual_result again = dual.run(7, s);
+            check("determinista: resultado semantico completo",
+                  opus::semantic_equal(first, again), std::to_string(repeat));
+        }
+
+        std::vector<uint8_t> ab(5, 0);
+        ab.insert(ab.end(), 5, 1);
+        std::vector<uint8_t> ba(5, 1);
+        ba.insert(ba.end(), 5, 0);
+        const opus::dual_result first_a = dual.run(9, ab);
+        const opus::dual_result first_b = dual.run(9, ba);
+        check("orden A-B completa", first_a.both_completed && first_a.signatures_valid);
+        check("orden B-A completa", first_b.both_completed && first_b.signatures_valid);
+        check("orden no cambia oraculos",
+              first_a.cross_session_verification == first_b.cross_session_verification &&
+              first_a.nonce_reuse == first_b.nonce_reuse &&
+              first_a.state_isolation == first_b.state_isolation &&
+              first_a.rollback_clean == first_b.rollback_clean &&
+              first_a.key_store_unchanged == first_b.key_store_unchanged &&
+              first_a.harness_fault == first_b.harness_fault);
     }
 
     // --- 4. un schedule corto no puede inventar un rechazo -----------------

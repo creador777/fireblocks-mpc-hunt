@@ -242,7 +242,8 @@ std::string record_fingerprint(
     std::string acc;
     for (const auto& entry : players) {
         acc += std::to_string(entry.first);
-        acc += entry.second->signing_store.has(txid) ? ":1" : ":0";
+        const auto digest = entry.second->signing_store.digest_for_txid(txid);
+        acc += digest ? ":1:" + *digest : ":0";
         acc += ",";
     }
     return acc;
@@ -262,6 +263,46 @@ const char* to_string(ceremony_state s)
     return "PENDING";
 }
 
+dual_oracle_verdict evaluate_dual_oracles(const dual_oracle_observation& o)
+{
+    dual_oracle_verdict v;
+    v.signatures_valid = o.signatures_observed &&
+                         o.signature_a_valid && o.signature_b_valid;
+    v.cross_session_verification = o.signatures_observed &&
+                                   (o.cross_ab || o.cross_ba);
+    v.nonce_reuse = o.signatures_observed && o.messages_distinct && o.nonce_equal;
+    v.state_isolation = o.other_records_unchanged;
+    v.rollback_clean = o.rollback_a_clean && o.rollback_b_clean;
+    v.key_store_unchanged = o.key_stores_unchanged;
+    v.harness_fault = o.harness_fault || (o.both_completed && !o.signatures_observed);
+    return v;
+}
+
+bool semantic_equal(const ceremony_report& lhs, const ceremony_report& rhs)
+{
+    return lhs.state == rhs.state &&
+           lhs.rounds_completed == rhs.rounds_completed &&
+           lhs.signature_produced == rhs.signature_produced &&
+           lhs.exception_type == rhs.exception_type && lhs.detail == rhs.detail;
+}
+
+bool semantic_equal(const dual_result& lhs, const dual_result& rhs)
+{
+    return lhs.both_completed == rhs.both_completed &&
+           lhs.max_round_reached == rhs.max_round_reached &&
+           lhs.advanced_past_injection == rhs.advanced_past_injection &&
+           lhs.interleave_points == rhs.interleave_points &&
+           lhs.signatures_valid == rhs.signatures_valid &&
+           lhs.cross_session_verification == rhs.cross_session_verification &&
+           lhs.nonce_reuse == rhs.nonce_reuse &&
+           lhs.state_isolation == rhs.state_isolation &&
+           lhs.rollback_clean == rhs.rollback_clean &&
+           lhs.key_store_unchanged == rhs.key_store_unchanged &&
+           lhs.harness_fault == rhs.harness_fault &&
+           semantic_equal(lhs.a, rhs.a) && semantic_equal(lhs.b, rhs.b) &&
+           lhs.schedule == rhs.schedule && lhs.detail == rhs.detail;
+}
+
 dual_session::dual_session(const snapshot& snap, const std::string& key_id, std::string& err)
     : _key_id(key_id), _snap(snap)
 {
@@ -277,6 +318,7 @@ dual_session::dual_session(const snapshot& snap, const std::string& key_id, std:
 dual_result dual_session::run(uint64_t seed, const std::vector<uint8_t>& schedule)
 {
     dual_result res;
+    dual_oracle_observation observations;
     const auto t0 = Clock::now();
 
     if (!_ok) {
@@ -304,7 +346,7 @@ dual_result dual_session::run(uint64_t seed, const std::vector<uint8_t>& schedul
     for (uint64_t id : _ids)
         players.emplace(id, std::make_unique<player_ctx>(id, _key_stores.at(id)));
 
-    const std::string key_digest_before = _key_stores.at(signers.front()).digest();
+    const std::string key_digest_before = aggregate_key_store_digest(_key_stores);
 
     const std::vector<uint32_t> path{44, 0, 0, 0, 0};
     ceremony a(0, players, _key_id, signers, path);
@@ -351,7 +393,7 @@ dual_result dual_session::run(uint64_t seed, const std::vector<uint8_t>& schedul
         const bool advanced = cer[turn]->step();
 
         if (record_fingerprint(players, other_txid) != before) {
-            res.state_isolation = false;
+            observations.other_records_unchanged = false;
             res.detail = "a step of one ceremony changed the other record";
         }
 
@@ -364,13 +406,15 @@ dual_result dual_session::run(uint64_t seed, const std::vector<uint8_t>& schedul
 
     res.a = a.report();
     res.b = b.report();
-    res.harness_fault = (a.state() == ceremony_state::FAULTED ||
-                         b.state() == ceremony_state::FAULTED);
     res.both_completed = (a.state() == ceremony_state::COMPLETED &&
                           b.state() == ceremony_state::COMPLETED);
+    observations.both_completed = res.both_completed;
+    observations.harness_fault = (a.state() == ceremony_state::FAULTED ||
+                                  b.state() == ceremony_state::FAULTED);
 
     // --- oraculos sobre firmas completas ----------------------------------
     if (res.both_completed && !a.sigs().empty() && !b.sigs().empty()) {
+        observations.signatures_observed = true;
         const recoverable_signature& sa = a.sigs().front();
         const recoverable_signature& sb = b.sigs().front();
 
@@ -379,7 +423,8 @@ dual_result dual_session::run(uint64_t seed, const std::vector<uint8_t>& schedul
                                                a.chaincode(), sa, false, detail);
         const bool vb = oracle_signature_valid(_snap, b.expected_message(), b.path(),
                                                b.chaincode(), sb, false, detail);
-        res.signatures_valid = va && vb;
+        observations.signature_a_valid = va;
+        observations.signature_b_valid = vb;
 
         // Cruzado: la firma de A NO debe verificar el mensaje de B. Que lo
         // hiciera significaria que una sesion firmo lo de la otra.
@@ -388,12 +433,14 @@ dual_result dual_session::run(uint64_t seed, const std::vector<uint8_t>& schedul
                                                      b.chaincode(), sa, false, ignored);
         const bool cross_ba = oracle_signature_valid(_snap, a.expected_message(), a.path(),
                                                      a.chaincode(), sb, false, ignored);
-        res.cross_session_verification = cross_ab || cross_ba;
+        observations.cross_ab = cross_ab;
+        observations.cross_ba = cross_ba;
 
         // Reutilizacion de nonce. Dos firmas con el mismo r sobre mensajes
         // distintos revelan la clave privada en ECDSA. La comparacion es
         // interna; ni r ni s salen de aqui.
-        res.nonce_reuse = (memcmp(sa.r, sb.r, sizeof(sa.r)) == 0);
+        observations.messages_distinct = a.expected_message() != b.expected_message();
+        observations.nonce_equal = (memcmp(sa.r, sb.r, sizeof(sa.r)) == 0);
     }
 
     // --- rollback: un get_cmp_signature exitoso no deja registro temporal --
@@ -407,13 +454,22 @@ dual_result dual_session::run(uint64_t seed, const std::vector<uint8_t>& schedul
     const uint64_t observer = signers.front();
     if (a.state() == ceremony_state::COMPLETED &&
         players.at(observer)->signing_store.has(a.txid()))
-        res.rollback_clean = false;
+        observations.rollback_a_clean = false;
     if (b.state() == ceremony_state::COMPLETED &&
         players.at(observer)->signing_store.has(b.txid()))
-        res.rollback_clean = false;
+        observations.rollback_b_clean = false;
 
-    res.key_store_unchanged =
-        (key_digest_before == _key_stores.at(signers.front()).digest());
+    observations.key_stores_unchanged =
+        (key_digest_before == aggregate_key_store_digest(_key_stores));
+
+    const dual_oracle_verdict verdict = evaluate_dual_oracles(observations);
+    res.signatures_valid = verdict.signatures_valid;
+    res.cross_session_verification = verdict.cross_session_verification;
+    res.nonce_reuse = verdict.nonce_reuse;
+    res.state_isolation = verdict.state_isolation;
+    res.rollback_clean = verdict.rollback_clean;
+    res.key_store_unchanged = verdict.key_store_unchanged;
+    res.harness_fault = verdict.harness_fault;
 
     res.elapsed_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count());
