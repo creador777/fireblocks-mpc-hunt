@@ -6,6 +6,7 @@ LOCK="${ROOT}/UPSTREAM.lock"
 
 declare -A value=()
 while IFS='=' read -r key item; do
+    item="${item%$'\r'}"
     [[ -n "${key}" && -n "${item}" ]] || continue
     value["${key}"]="${item}"
 done < "${LOCK}"
