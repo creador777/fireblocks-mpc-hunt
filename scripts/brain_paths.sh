@@ -34,7 +34,7 @@ fi
 #: Superficies conocidas. Identica a HARNESSES de public_summary.py y a
 #: RULES["harness"] de emit_summary.py; tests/test_harness_contract.py exige
 #: que las tres coincidan.
-BRAIN_HARNESSES="cmp_ecdsa_online cmp_ecdsa_online_r4_tn"
+BRAIN_HARNESSES="cmp_ecdsa_online cmp_ecdsa_online_r4_tn cmp_ecdsa_online_dual"
 
 #: Entero canonico: 0, o un digito no nulo seguido de digitos. Excluye "007",
 #: "+1", " 1", "1 ", vacio y cualquier cosa con salto de linea.
@@ -58,6 +58,7 @@ lane_to_harness() {
     case "$1" in
         cmp_general) printf '%s\n' cmp_ecdsa_online ;;
         cmp_r4_tn)   printf '%s\n' cmp_ecdsa_online_r4_tn ;;
+        cmp_dual)    printf '%s\n' cmp_ecdsa_online_dual ;;
         *)           return 64 ;;
     esac
 }

@@ -27,6 +27,11 @@ case "${LANE}" in
         FIREBLOCKS_SNAPSHOT=/opt/fireblocks/data/snapshot_tn.bin
         FIREBLOCKS_BIN=/opt/fireblocks/bin/opus_cmp_fuzzer_reachability_v2
         ;;
+    cmp_dual)
+        FIREBLOCKS_HARNESS=cmp_ecdsa_online_dual
+        FIREBLOCKS_SNAPSHOT=/opt/fireblocks/data/snapshot_tn.bin
+        FIREBLOCKS_BIN=/opt/fireblocks/bin/opus_cmp_fuzzer_dual
+        ;;
     *)
         printf 'status=fail_closed code=unknown_lane\n' >&2
         exit 64

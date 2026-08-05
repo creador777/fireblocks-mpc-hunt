@@ -55,6 +55,48 @@ std::string sha256_hex(const std::string& in)
     return out;
 }
 
+void append_signing_record(std::string& acc,
+                           const std::string& txid,
+                           const cmp_signing_metadata& md)
+{
+    append_blob(acc, reinterpret_cast<const uint8_t*>(txid.data()), txid.size());
+    append_blob(acc, reinterpret_cast<const uint8_t*>(md.key_id.data()), md.key_id.size());
+    append_bytes(acc, md.chaincode, sizeof(HDChaincode));
+    append_bytes(acc, md.ack, sizeof(commitments_sha256_t));
+    append_u64(acc, md.version);
+    for (uint64_t sid : md.signers_ids)
+        append_u64(acc, sid);
+    append_u64(acc, md.sig_data.size());
+    for (const auto& sd : md.sig_data) {
+        append_u64(acc, sd.flags);
+        append_bytes(acc, sd.message, sizeof(elliptic_curve256_scalar_t));
+        append_bytes(acc, sd.R.data, sizeof(elliptic_curve256_point_t));
+        append_u64(acc, sd.path.size());
+        for (uint32_t p : sd.path)
+            append_u64(acc, p);
+        append_bytes(acc, sd.k.data, sizeof(elliptic_curve256_scalar_t));
+        append_bytes(acc, sd.gamma.data, sizeof(elliptic_curve256_scalar_t));
+        append_bytes(acc, sd.a.data, sizeof(elliptic_curve256_scalar_t));
+        append_bytes(acc, sd.b.data, sizeof(elliptic_curve256_scalar_t));
+        append_bytes(acc, sd.delta.data, sizeof(elliptic_curve256_scalar_t));
+        append_bytes(acc, sd.chi.data, sizeof(elliptic_curve256_scalar_t));
+        append_bytes(acc, sd.GAMMA.data, sizeof(elliptic_curve256_point_t));
+        append_u64(acc, sd.mta_request.size());
+        for (const auto& [pid, proof] : sd.G_proofs) {
+            append_u64(acc, pid);
+            append_u64(acc, proof.size());
+        }
+        for (const auto& [pid, pd] : sd.public_data) {
+            append_u64(acc, pid);
+            append_bytes(acc, pd.A.data, sizeof(elliptic_curve256_point_t));
+            append_bytes(acc, pd.B.data, sizeof(elliptic_curve256_point_t));
+            append_bytes(acc, pd.Z.data, sizeof(elliptic_curve256_point_t));
+            append_bytes(acc, pd.GAMMA.data, sizeof(elliptic_curve256_point_t));
+            append_u64(acc, pd.gamma_commitment.size());
+        }
+    }
+}
+
 // Serialize a paillier public key into the digest. Returns nothing on null.
 void append_paillier_pub(std::string& out, const paillier_public_key_t* pub)
 {
@@ -344,43 +386,39 @@ std::string det_signing_persistency::digest() const
 {
     std::shared_lock lock(_mutex);
     std::string acc;
-    for (const auto& [txid, md] : _metadata) {          // ordered
-        append_blob(acc, reinterpret_cast<const uint8_t*>(txid.data()), txid.size());
-        append_blob(acc, reinterpret_cast<const uint8_t*>(md.key_id.data()), md.key_id.size());
-        append_bytes(acc, md.chaincode, sizeof(HDChaincode));
-        append_bytes(acc, md.ack, sizeof(commitments_sha256_t));
-        append_u64(acc, md.version);
-        for (uint64_t sid : md.signers_ids)             // std::set => ordered
-            append_u64(acc, sid);
-        append_u64(acc, md.sig_data.size());
-        for (const auto& sd : md.sig_data) {
-            append_u64(acc, sd.flags);
-            append_bytes(acc, sd.message, sizeof(elliptic_curve256_scalar_t));
-            append_bytes(acc, sd.R.data, sizeof(elliptic_curve256_point_t));
-            append_u64(acc, sd.path.size());
-            for (uint32_t p : sd.path)
-                append_u64(acc, p);
-            append_bytes(acc, sd.k.data, sizeof(elliptic_curve256_scalar_t));
-            append_bytes(acc, sd.gamma.data, sizeof(elliptic_curve256_scalar_t));
-            append_bytes(acc, sd.a.data, sizeof(elliptic_curve256_scalar_t));
-            append_bytes(acc, sd.b.data, sizeof(elliptic_curve256_scalar_t));
-            append_bytes(acc, sd.delta.data, sizeof(elliptic_curve256_scalar_t));
-            append_bytes(acc, sd.chi.data, sizeof(elliptic_curve256_scalar_t));
-            append_bytes(acc, sd.GAMMA.data, sizeof(elliptic_curve256_point_t));
-            append_u64(acc, sd.mta_request.size());
-            for (const auto& [pid, proof] : sd.G_proofs) {
-                append_u64(acc, pid);
-                append_u64(acc, proof.size());
-            }
-            for (const auto& [pid, pd] : sd.public_data) {
-                append_u64(acc, pid);
-                append_bytes(acc, pd.A.data, sizeof(elliptic_curve256_point_t));
-                append_bytes(acc, pd.B.data, sizeof(elliptic_curve256_point_t));
-                append_bytes(acc, pd.Z.data, sizeof(elliptic_curve256_point_t));
-                append_bytes(acc, pd.GAMMA.data, sizeof(elliptic_curve256_point_t));
-                append_u64(acc, pd.gamma_commitment.size());
-            }
-        }
+    for (const auto& [txid, md] : _metadata)
+        append_signing_record(acc, txid, md);
+    return sha256_hex(acc);
+}
+
+std::optional<std::string> det_signing_persistency::digest_for_txid(
+    const std::string& txid) const
+{
+    std::shared_lock lock(_mutex);
+    const auto it = _metadata.find(txid);
+    if (it == _metadata.end())
+        return std::nullopt;
+    std::string acc;
+    append_signing_record(acc, it->first, it->second);
+    return sha256_hex(acc);
+}
+
+std::string canonical_signing_record_digest(const std::string& txid,
+                                            const cmp_signing_metadata& data)
+{
+    std::string acc;
+    append_signing_record(acc, txid, data);
+    return sha256_hex(acc);
+}
+
+std::string aggregate_key_store_digest(
+    const std::map<uint64_t, det_key_persistency>& stores)
+{
+    std::string acc;
+    for (const auto& [player_id, store] : stores) {
+        append_u64(acc, player_id);
+        const std::string one = store.digest();
+        append_blob(acc, reinterpret_cast<const uint8_t*>(one.data()), one.size());
     }
     return sha256_hex(acc);
 }

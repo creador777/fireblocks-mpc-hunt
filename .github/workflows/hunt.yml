@@ -39,6 +39,7 @@ on:
           - select_lane
           - cmp_general
           - cmp_r4_tn
+          - cmp_dual
       workers:
         description: Fork-mode workers per shard (4 requires exact approved tuple)
         required: true

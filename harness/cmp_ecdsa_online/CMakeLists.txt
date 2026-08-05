@@ -63,6 +63,7 @@ add_library(opus_core STATIC
     src/fixtures.cpp
     src/snapshot.cpp
     src/driver.cpp
+    src/dual_session.cpp
     src/mutators.cpp
     src/oracles.cpp
 )
@@ -91,6 +92,14 @@ target_link_libraries(opus_selftest PRIVATE opus_core)
 add_executable(opus_test_extra_map_key tests/test_extra_map_key.cpp)
 target_link_libraries(opus_test_extra_map_key PRIVATE opus_core)
 
+# Control del harness dual. Es una puerta, no un test mas: si dos ceremonias
+# validas no completan, no hay nada que fuzzear.
+add_executable(opus_test_dual_session tests/test_dual_session.cpp)
+target_link_libraries(opus_test_dual_session PRIVATE opus_core)
+
+add_executable(opus_test_dual_oracle_calibration tests/test_dual_oracle_calibration.cpp)
+target_link_libraries(opus_test_dual_oracle_calibration PRIVATE opus_core)
+
 # Case runner.
 add_executable(opus_cmp_harness src/main.cpp)
 target_link_libraries(opus_cmp_harness PRIVATE opus_core)
@@ -102,6 +111,7 @@ target_link_libraries(opus_cmp_smoke PRIVATE opus_core)
 enable_testing()
 add_test(NAME selftest COMMAND opus_selftest)
 add_test(NAME extra_map_key COMMAND opus_test_extra_map_key)
+add_test(NAME dual_oracle_calibration COMMAND opus_test_dual_oracle_calibration)
 
 # --------------------------------------------------------------------------
 # V2 candidate: SEPARATE binary, corpus and artifacts. The V1 fuzzer build
@@ -113,6 +123,11 @@ add_library(opus_telemetry_v2 STATIC
     src/telemetry_v2.cpp
 )
 target_link_libraries(opus_telemetry_v2 PUBLIC opus_core)
+
+add_executable(opus_cmp_fuzzer_dual src/fuzzer_dual_session.cpp)
+target_compile_options(opus_cmp_fuzzer_dual PRIVATE -fsanitize=fuzzer)
+target_link_options(opus_cmp_fuzzer_dual PRIVATE -fsanitize=fuzzer)
+target_link_libraries(opus_cmp_fuzzer_dual PRIVATE opus_telemetry_v2)
 
 add_executable(opus_cmp_fuzzer_reachability_v2 src/fuzzer_reachability_v2.cpp)
 target_compile_options(opus_cmp_fuzzer_reachability_v2 PRIVATE -fsanitize=fuzzer)

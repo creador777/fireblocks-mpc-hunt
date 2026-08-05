@@ -7,6 +7,7 @@
 #include "cosigner/types.h"
 
 #include <map>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -148,6 +149,10 @@ public:
     // Canonical digest of the whole map, for oracle O4 (D_sig).
     std::string digest() const;
 
+    // Canonical digest of exactly one transaction record. Absence stays
+    // distinct from every possible digest.
+    std::optional<std::string> digest_for_txid(const std::string& txid) const;
+
     // Read-only inspection for the state-machine oracle.
     bool has(const std::string& txid) const;
     bool try_get(const std::string& txid,
@@ -177,6 +182,13 @@ private:
     size_t _update_calls = 0;
     size_t _delete_calls = 0;
 };
+
+std::string canonical_signing_record_digest(
+    const std::string& txid,
+    const fireblocks::common::cosigner::cmp_signing_metadata& data);
+
+std::string aggregate_key_store_digest(
+    const std::map<uint64_t, det_key_persistency>& stores);
 
 // One player's complete instance. Declaration order matters: the service
 // constructor binds references to the two members above it.
