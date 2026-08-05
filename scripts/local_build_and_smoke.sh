@@ -6,7 +6,7 @@ SOURCE_UPSTREAM="${1:-${ROOT}/_upstream}"
 IMAGE="${2:-fireblocks-mpc-hunt:local}"
 
 [[ -d "${SOURCE_UPSTREAM}/.git" ]]
-EXPECTED="$(awk -F= '$1=="commit" {print $2}' "${ROOT}/UPSTREAM.lock")"
+EXPECTED="$(awk -F= '$1=="commit" {print $2}' "${ROOT}/UPSTREAM.lock" | tr -d '\r')"
 [[ "$(git -C "${SOURCE_UPSTREAM}" rev-parse HEAD)" == "${EXPECTED}" ]]
 [[ -z "$(git -C "${SOURCE_UPSTREAM}" status --porcelain=v1)" ]]
 
