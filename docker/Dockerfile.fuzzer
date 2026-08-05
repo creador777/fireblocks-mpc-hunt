@@ -73,6 +73,9 @@ RUN mkdir -p /opt/fireblocks/bin /opt/fireblocks/lib /opt/fireblocks/data \
       /opt/fireblocks/data/snapshot_tn.bin \
  && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
       UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      /build/harness/cmp_ecdsa_online/opus_test_dual_oracle_calibration \
+ && ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:detect_leaks=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
       /build/harness/cmp_ecdsa_online/opus_cmp_smoke \
       /opt/fireblocks/data/snapshot.bin \
  && cp /build/opus_cmp_fuzzer /opt/fireblocks/bin/ \
