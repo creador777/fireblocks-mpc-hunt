@@ -57,6 +57,24 @@ class CloudWindowWorkflowTests(unittest.TestCase):
         self.assertNotIn("GITHUB_RUN_ATTEMPT", block)
         self.assertNotIn("date ", block)
 
+    def test_private_corpus_source_is_derived_from_lane(self) -> None:
+        # Catches hardcoding brain/corpus/cmp_ecdsa_online for all lanes.
+        # The private source must be brain/corpus/<harness> where harness
+        # is lane_to_harness(FIREBLOCKS_LANE) and corpus_rel=corpus_dir_for(harness).
+        block = step("Materialize deterministic 24-unit corpus window privately")
+        self.assertIn('lane_to_harness', block)
+        self.assertIn('FIREBLOCKS_LANE', block)
+        self.assertIn('corpus_dir_for', block)
+        self.assertIn('brain/${corpus_rel}', block)
+        self.assertIn('GITHUB_WORKSPACE}/hunt/scripts/brain_paths.sh', block)
+        # Old hardcoded value must be gone; common public seed stays.
+        self.assertEqual(block.count("seeds/cmp_ecdsa_online/corpus"), 1)
+        self.assertEqual(block.count("brain/corpus/cmp_ecdsa_online\""), 0)
+        self.assertEqual(block.count("brain/${corpus_rel}"), 1)
+        self.assertIn('test -n "${harness}"', block)
+        self.assertIn('test -n "${corpus_rel}"', block)
+        self.assertIn('|| exit 64', block)
+
     def test_materializer_output_never_reaches_the_public_actions_log(self) -> None:
         # Catches removing private redirection or leaving its sidecar in the summary allowlist.
         block = step("Materialize deterministic 24-unit corpus window privately")

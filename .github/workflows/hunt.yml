@@ -201,18 +201,23 @@ jobs:
         working-directory: hunt
         env:
           SHARD: ${{ matrix.shard }}
+          FIREBLOCKS_LANE: ${{ needs.plan.outputs.lane }}
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
           mkdir -p "${root}/corpus" "${root}/output/private_plain" \
             "${root}/state" "${root}/upload"
+          harness="$(bash "${GITHUB_WORKSPACE}/hunt/scripts/brain_paths.sh" lane_to_harness "${FIREBLOCKS_LANE}")" || exit 64
+          test -n "${harness}"
+          corpus_rel="$(bash "${GITHUB_WORKSPACE}/hunt/scripts/brain_paths.sh" corpus_dir_for "${harness}")" || exit 64
+          test -n "${corpus_rel}"
           if python3 scripts/materialize_window.py \
             "${root}/corpus" \
             "${SHARD}" \
             "${{ needs.plan.outputs.count }}" \
             "${GITHUB_RUN_NUMBER}" \
             "${GITHUB_WORKSPACE}/hunt/seeds/cmp_ecdsa_online/corpus" \
-            "${GITHUB_WORKSPACE}/brain/corpus/cmp_ecdsa_online" \
+            "${GITHUB_WORKSPACE}/brain/${corpus_rel}" \
             >"${root}/output/private_plain/materialize.log" 2>&1
           then
             rm -f -- "${root}/output/private_plain/materialize.log"
