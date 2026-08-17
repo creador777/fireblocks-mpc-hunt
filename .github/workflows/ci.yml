@@ -72,6 +72,10 @@ jobs:
             fireblocks-mpc-hunt-tests:ci \
             -m unittest -v tests.test_workflow_policy \
             tests.test_cloud_window_workflow \
+            tests.test_materialize_window \
+            tests.test_pool_capacity \
+            tests.test_report_materialize_failure \
+            tests.test_corpus_feedback_closure \
             tests.test_telemetry_evidence \
             tests.test_harness_contract
           docker run --rm \

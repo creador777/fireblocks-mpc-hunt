@@ -76,6 +76,15 @@ class WorkflowPolicyTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, combined)
 
+    def test_07b_defensive_ci_runs_corpus_boundary_tests(self) -> None:
+        for module in (
+            "tests.test_materialize_window",
+            "tests.test_pool_capacity",
+            "tests.test_report_materialize_failure",
+            "tests.test_corpus_feedback_closure",
+        ):
+            self.assertIn(module, CI)
+
     def test_08_runner_propagates_container_status(self) -> None:
         self.assertIn('exit "${RC}"', RUNNER)
         self.assertIn("-error_exitcode=77", RUNNER)

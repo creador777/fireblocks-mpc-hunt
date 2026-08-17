@@ -23,10 +23,46 @@ NAME_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_SHARDS = 4096
 MAX_SHARDED_SOURCES = 64
 MAX_UNIT_BYTES = 1024 * 1024
-MAX_UNIQUE_FILES = 100_000
+MAX_TOTAL_FILES = 1_000_000
+MAX_BUCKET_FILES = 100_000
+MAX_BUCKET_BYTES = 128 * 1024 * 1024
 MAX_TOTAL_BYTES = 512 * 1024 * 1024
 READ_SIZE = 1024 * 1024
 WINDOW_SIZE = 24
+SCHEDULE_VERSION = "prefix-v1"
+
+FAILURE_CODES = frozenset(
+    {
+        "arguments",
+        "bucket_cap",
+        "bucket_size_cap",
+        "common_capacity",
+        "content_hash",
+        "destination_dirty",
+        "destination_directory",
+        "destination_mode",
+        "destination_scan",
+        "destination_write",
+        "file_count_cap",
+        "interrupted",
+        "materializer_internal",
+        "shard_index",
+        "shard_range",
+        "source_changed",
+        "source_count_cap",
+        "source_directory",
+        "source_name",
+        "source_nonregular",
+        "source_open",
+        "source_scan",
+        "source_stat",
+        "staging_create",
+        "total_size_cap",
+        "unit_size_cap",
+        "wave_number",
+        "wave_shard_count",
+    }
+)
 
 
 class FailClosed(Exception):
@@ -40,6 +76,16 @@ class Unit:
     name: str
     source: Path
     size: int
+
+
+@dataclass(frozen=True)
+class PrivateInventory:
+    sources: tuple[Path, ...]
+    prefixes: tuple[str, ...]
+    total_files: int
+    total_bytes: int
+    bucket_files: tuple[tuple[str, int], ...]
+    bucket_bytes: tuple[tuple[str, int], ...]
 
 
 def reject(code: str) -> None:
@@ -111,7 +157,7 @@ def validate_source(directory: Path) -> dict[str, Unit]:
         entries = list(os.scandir(directory))
     except OSError:
         reject("source_scan")
-    if len(entries) > MAX_UNIQUE_FILES:
+    if len(entries) > MAX_BUCKET_FILES:
         reject("file_count_cap")
 
     for entry in entries:
@@ -144,21 +190,92 @@ def validate_destination(destination: Path) -> None:
         reject("destination_scan")
 
 
-def merge_private(sources: Iterable[Path]) -> dict[str, Unit]:
-    merged: dict[str, Unit] = {}
+def _scan_private_sources(
+    sources: tuple[Path, ...], selected_prefix: str | None
+) -> tuple[PrivateInventory, dict[str, list[Unit]]]:
+    """Validate metadata globally and retain at most one selected bucket."""
+    selected: dict[str, list[Unit]] = {}
+    bucket_files: dict[str, int] = {}
+    bucket_bytes: dict[str, int] = {}
+    total_files = 0
+    total_bytes = 0
+
     for source in sources:
-        for name, unit in validate_source(source).items():
-            merged.setdefault(name, unit)
-    return merged
+        lstat_directory(source, "source_directory")
+        try:
+            with os.scandir(source) as entries:
+                for entry in entries:
+                    if not NAME_RE.fullmatch(entry.name):
+                        reject("source_name")
+                    try:
+                        metadata = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        reject("source_stat")
+                    if entry.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+                        reject("source_nonregular")
+                    if metadata.st_size > MAX_UNIT_BYTES:
+                        reject("unit_size_cap")
+
+                    total_files += 1
+                    total_bytes += metadata.st_size
+                    if total_files > MAX_TOTAL_FILES:
+                        reject("file_count_cap")
+                    if total_bytes > MAX_TOTAL_BYTES:
+                        reject("total_size_cap")
+
+                    prefix = entry.name[:2]
+                    bucket_files[prefix] = bucket_files.get(prefix, 0) + 1
+                    bucket_bytes[prefix] = bucket_bytes.get(prefix, 0) + metadata.st_size
+                    if bucket_files[prefix] > MAX_BUCKET_FILES:
+                        reject("bucket_cap")
+                    if bucket_bytes[prefix] > MAX_BUCKET_BYTES:
+                        reject("bucket_size_cap")
+
+                    if prefix == selected_prefix:
+                        unit = Unit(entry.name, source / entry.name, metadata.st_size)
+                        selected.setdefault(entry.name, []).append(unit)
+        except FailClosed:
+            raise
+        except OSError:
+            reject("source_scan")
+    inventory = PrivateInventory(
+        sources=sources,
+        prefixes=tuple(sorted(bucket_files)),
+        total_files=total_files,
+        total_bytes=total_bytes,
+        bucket_files=tuple(sorted(bucket_files.items())),
+        bucket_bytes=tuple(sorted(bucket_bytes.items())),
+    )
+    return inventory, selected
 
 
-def enforce_global_caps(common: dict[str, Unit], private: dict[str, Unit]) -> None:
-    total_files = len(common) + len(private)
-    if total_files > MAX_UNIQUE_FILES:
-        reject("file_count_cap")
-    total_bytes = sum(unit.size for unit in common.values()) + sum(unit.size for unit in private.values())
-    if total_bytes > MAX_TOTAL_BYTES:
-        reject("total_size_cap")
+def scan_private_inventory(sources: Iterable[Path]) -> PrivateInventory:
+    """Validate a flat inventory while retaining only 256 aggregate counters."""
+    inventory, _ = _scan_private_sources(tuple(sources), None)
+    return inventory
+
+
+def validate_private_bucket(inventory: PrivateInventory, prefix: str) -> dict[str, Unit]:
+    """Hash every physical candidate in the selected logical bucket."""
+    rescanned, candidates = _scan_private_sources(inventory.sources, prefix)
+    if rescanned != inventory:
+        reject("source_changed")
+    validated: dict[str, Unit] = {}
+    for name in sorted(candidates):
+        for unit in candidates[name]:
+            try:
+                metadata = unit.source.lstat()
+            except OSError:
+                reject("source_changed")
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                reject("source_changed")
+            actual_hash, actual_size = hash_regular_file(unit.source, metadata)
+            if actual_hash != name:
+                reject("content_hash")
+            if actual_size != unit.size:
+                reject("source_changed")
+            validated.setdefault(name, unit)
+    return validated
 
 
 def copy_verified(unit: Unit, destination: Path) -> None:
@@ -218,13 +335,17 @@ def manifest_hash(
     window_count: int,
     common_names: list[str],
     private_names: list[str],
+    bucket_prefix: str | None,
+    bucket_visit: int,
 ) -> str:
     digest = hashlib.sha256()
     printable_window = "none" if window_index is None else str(window_index)
     digest.update(
         (
             f"shard_index={shard_index}\nwave_shard_count={wave_shard_count}\n"
-            f"wave_number={wave_number}\nwindow_index={printable_window}\nwindow_count={window_count}\n"
+            f"wave_number={wave_number}\nschedule_version={SCHEDULE_VERSION}\n"
+            f"bucket_prefix={'none' if bucket_prefix is None else bucket_prefix}\n"
+            f"bucket_visit={bucket_visit}\nwindow_index={printable_window}\nwindow_count={window_count}\n"
         ).encode("ascii")
     )
     for name in common_names:
@@ -234,7 +355,9 @@ def manifest_hash(
     return digest.hexdigest()
 
 
-def materialize(arguments: list[str]) -> tuple[int, int, int, int | None, int, int, int, str]:
+def materialize(
+    arguments: list[str],
+) -> tuple[int, int, int, int | None, int, int, int, str, str | None, int]:
     if len(arguments) < 6:
         reject("arguments")
     destination = Path(arguments[0])
@@ -253,17 +376,25 @@ def materialize(arguments: list[str]) -> tuple[int, int, int, int | None, int, i
     if not 1 <= len(common) < WINDOW_SIZE:
         reject("common_capacity")
     private_capacity = WINDOW_SIZE - len(common)
-    private = merge_private(sharded_sources)
-    # Both roles were fully validated above; a learned public seed already
-    # present in the private master is one unit and must not consume capacity twice.
-    private = {name: unit for name, unit in private.items() if name not in common}
-    enforce_global_caps(common, private)
-
     common_names = sorted(common)
+    inventory = scan_private_inventory(sharded_sources)
+    prefixes = list(inventory.prefixes)
+    ordinal = wave_number * wave_shard_count + shard_index
+    bucket_visit = 0
+    bucket_prefix: str | None = None
+    private: dict[str, Unit] = {}
+    if prefixes:
+        bucket_prefix = prefixes[ordinal % len(prefixes)]
+        bucket_visit = ordinal // len(prefixes)
+        private = validate_private_bucket(inventory, bucket_prefix)
+        # The selected private bucket was fully validated above. A learned
+        # public seed already present there is one unit, not two.
+        private = {name: unit for name, unit in private.items() if name not in common}
+
     all_private_names = sorted(private)
     window_count = (len(all_private_names) + private_capacity - 1) // private_capacity
     if window_count:
-        window_index: int | None = (wave_number * wave_shard_count + shard_index) % window_count
+        window_index: int | None = bucket_visit % window_count
         start = window_index * private_capacity
         assigned_names = all_private_names[start : start + private_capacity]
     else:
@@ -308,8 +439,18 @@ def materialize(arguments: list[str]) -> tuple[int, int, int, int | None, int, i
         len(common_names),
         len(assigned_names),
         manifest_hash(
-            shard_index, wave_shard_count, wave_number, window_index, window_count, common_names, assigned_names
+            shard_index,
+            wave_shard_count,
+            wave_number,
+            window_index,
+            window_count,
+            common_names,
+            assigned_names,
+            bucket_prefix,
+            bucket_visit,
         ),
+        bucket_prefix,
+        bucket_visit,
     )
 
 
@@ -317,7 +458,7 @@ def main() -> int:
     try:
         (
             shard_index, wave_shard_count, wave_number, window_index, window_count,
-            common_files, private_files, manifest,
+            common_files, private_files, manifest, bucket_prefix, bucket_visit,
         ) = materialize(sys.argv[1:])
     except FailClosed as error:
         print(f"status=fail_closed code={error.code}", file=sys.stderr)
@@ -326,13 +467,16 @@ def main() -> int:
         print("status=fail_closed code=interrupted", file=sys.stderr)
         return 2
     except BaseException:
-        print("status=fail_closed code=internal", file=sys.stderr)
+        print("status=fail_closed code=materializer_internal", file=sys.stderr)
         return 2
 
     print("status=ok")
     print(f"shard_index={shard_index}")
     print(f"wave_shard_count={wave_shard_count}")
     print(f"wave_number={wave_number}")
+    print(f"schedule_version={SCHEDULE_VERSION}")
+    print(f"bucket_prefix={'none' if bucket_prefix is None else bucket_prefix}")
+    print(f"bucket_visit={bucket_visit}")
     print(f"window_index={'none' if window_index is None else window_index}")
     print(f"window_count={window_count}")
     print(f"common_files={common_files}")

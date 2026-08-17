@@ -198,6 +198,7 @@ jobs:
         run: bash scripts/build_fuzzer_image.sh "fireblocks-mpc-hunt:${GITHUB_RUN_ID}-${{ matrix.shard }}"
 
       - name: Materialize deterministic 24-unit corpus window privately
+        id: materialize
         working-directory: hunt
         env:
           SHARD: ${{ matrix.shard }}
@@ -205,6 +206,8 @@ jobs:
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/fireblocks-${SHARD}"
+          materialize_out="${root}/output/private_plain/materialize.out"
+          materialize_err="${root}/output/private_plain/materialize.err"
           mkdir -p "${root}/corpus" "${root}/output/private_plain" \
             "${root}/state" "${root}/upload"
           harness="$(bash "${GITHUB_WORKSPACE}/hunt/scripts/brain_paths.sh" lane_to_harness "${FIREBLOCKS_LANE}")" || exit 64
@@ -218,12 +221,15 @@ jobs:
             "${GITHUB_RUN_NUMBER}" \
             "${GITHUB_WORKSPACE}/hunt/seeds/cmp_ecdsa_online/corpus" \
             "${GITHUB_WORKSPACE}/brain/${corpus_rel}" \
-            >"${root}/output/private_plain/materialize.log" 2>&1
+            >"${materialize_out}" 2>"${materialize_err}"
           then
-            rm -f -- "${root}/output/private_plain/materialize.log"
+            rm -f -- "${materialize_out}" "${materialize_err}"
             rmdir -- "${root}/output/private_plain"
           else
-            exit 1
+            python3 scripts/report_materialize_failure.py "${materialize_err}"
+            rm -f -- "${materialize_out}" "${materialize_err}"
+            rmdir -- "${root}/output/private_plain"
+            exit 2
           fi
           test ! -e "${root}/output/private_plain"
           total="$(find "${root}/corpus" -mindepth 1 -maxdepth 1 -type f | wc -l)"
@@ -295,7 +301,7 @@ jobs:
         # validation, seven-field summary) failed, so evidence is always
         # secured before the failure propagates. On any failure this step
         # exits non-zero, so upload and publish below never run.
-        if: ${{ always() }}
+        if: ${{ always() && steps.materialize.outcome == 'success' }}
         working-directory: hunt
         env:
           SHARD: ${{ matrix.shard }}

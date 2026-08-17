@@ -76,12 +76,22 @@ class CloudWindowWorkflowTests(unittest.TestCase):
         self.assertIn('|| exit 64', block)
 
     def test_materializer_output_never_reaches_the_public_actions_log(self) -> None:
-        # Catches removing private redirection or leaving its sidecar in the summary allowlist.
+        # Catches merging private output into public logs or bypassing the closed reporter.
         block = step("Materialize deterministic 24-unit corpus window privately")
         self.assertIn('mkdir -p "${root}/corpus" "${root}/output/private_plain"', block)
-        self.assertIn('>"${root}/output/private_plain/materialize.log" 2>&1', block)
-        self.assertIn('rm -f -- "${root}/output/private_plain/materialize.log"', block)
+        self.assertIn('>"${materialize_out}" 2>"${materialize_err}"', block)
+        self.assertIn('python3 scripts/report_materialize_failure.py "${materialize_err}"', block)
+        self.assertIn('rm -f -- "${materialize_out}" "${materialize_err}"', block)
         self.assertIn('rmdir -- "${root}/output/private_plain"', block)
+
+    def test_materialize_step_has_id_and_finalizer_runs_only_after_it_succeeds(self) -> None:
+        block = step("Materialize deterministic 24-unit corpus window privately")
+        self.assertIn("        id: materialize", block)
+        finalize = step("Encrypt evidence and verify plaintext cleanup")
+        self.assertIn(
+            "if: ${{ always() && steps.materialize.outcome == 'success' }}",
+            finalize,
+        )
 
     def test_existing_gpg_seven_field_and_private_publish_gates_remain(self) -> None:
         # Catches bypassing encryption/cleanup, expanding public output, or skipping validation.
@@ -89,7 +99,7 @@ class CloudWindowWorkflowTests(unittest.TestCase):
         upload = step("Upload encrypted bundle only")
         publish = step("Publish corpus and encrypted incident to a unique private branch")
         emit = step("Emit only the seven-field public summary")
-        self.assertIn("if: ${{ always() }}", finalize)
+        self.assertIn("steps.materialize.outcome == 'success'", finalize)
         self.assertIn("cloud_finalize_incident.sh", finalize)
         self.assertIn("test ! -e", finalize)
         self.assertIn(".gpg", upload)
