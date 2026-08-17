@@ -147,6 +147,19 @@ for branch in "${ALL_REFS[@]}"; do
     done < <(git -C "${STAGE}" ls-tree -r --full-tree "${ref}")
 done
 
+# Refuse to create a pool revision that the shard reader cannot consume. The
+# scanner checks metadata and capacity only; every newly staged corpus blob was
+# already content-hashed above.
+capacity_dirs=()
+for harness in ${BRAIN_HARNESSES}; do
+    corpus_rel="$(corpus_dir_for "${harness}")"
+    if [[ -e "${STAGE}/${corpus_rel}" || -L "${STAGE}/${corpus_rel}" ]]; then
+        capacity_dirs+=("${STAGE}/${corpus_rel}")
+    fi
+done
+python3 "${ROOT}/scripts/validate_pool_capacity.py" "${capacity_dirs[@]}" \
+    > /dev/null
+
 git -C "${STAGE}" diff --cached --quiet --diff-filter=DR
 ! git -C "${STAGE}" diff --cached --quiet
 git -C "${STAGE}" -c user.name=fireblocks-hunt \

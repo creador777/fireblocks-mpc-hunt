@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts import materialize_window
 
@@ -13,6 +14,16 @@ def add_unit(directory: Path, label: str) -> str:
     name = hashlib.sha1(data).hexdigest()
     (directory / name).write_bytes(data)
     return name
+
+
+def add_unit_with_prefix(directory: Path, prefix: str, label: str) -> str:
+    for nonce in range(100_000):
+        data = f"synthetic-window-unit:{label}:{nonce}".encode("ascii")
+        name = hashlib.sha1(data).hexdigest()
+        if name.startswith(prefix):
+            (directory / name).write_bytes(data)
+            return name
+    raise AssertionError(f"unable to synthesize prefix {prefix}")
 
 
 class MaterializeWindowTests(unittest.TestCase):
@@ -35,7 +46,7 @@ class MaterializeWindowTests(unittest.TestCase):
         wave: int,
         common: Path,
         private: Path,
-    ) -> tuple[int, int, int, int | None, int, int, int, str]:
+    ) -> tuple[int, int, int, int | None, int, int, int, str, str | None, int]:
         return materialize_window.materialize(
             [str(destination), str(shard), str(count), str(wave), str(common), str(private)]
         )
@@ -44,7 +55,9 @@ class MaterializeWindowTests(unittest.TestCase):
         # Catches using WINDOW_SIZE as private capacity before adding common units.
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            common, private, common_names, _ = self.make_sources(base, 1, 40)
+            common, private, common_names, _ = self.make_sources(base, 1, 0)
+            for index in range(40):
+                add_unit_with_prefix(private, "00", f"capacity-{index}")
             destination = base / "destination"
             destination.mkdir()
             result = self.call(destination, 0, 1, 0, common, private)
@@ -96,9 +109,11 @@ class MaterializeWindowTests(unittest.TestCase):
         # Catches rejecting a public seed that the additive private master already learned.
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            common, private, common_names, _ = self.make_sources(base, 1, 40)
+            common, private, common_names, _ = self.make_sources(base, 1, 0)
             overlap = common_names[0]
             (private / overlap).write_bytes((common / overlap).read_bytes())
+            for index in range(40):
+                add_unit_with_prefix(private, overlap[:2], f"overlap-{index}")
             destination = base / "destination"
             destination.mkdir()
             result = self.call(destination, 0, 1, 0, common, private)
@@ -111,7 +126,7 @@ class MaterializeWindowTests(unittest.TestCase):
         # Catches dropping common-name entries before validating private bytes.
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            common, private, common_names, _ = self.make_sources(base, 1, 40)
+            common, private, common_names, _ = self.make_sources(base, 1, 0)
             overlap = common_names[0]
             (private / overlap).write_bytes(b"wrong-private-overlap-content")
             destination = base / "destination"
@@ -125,7 +140,7 @@ class MaterializeWindowTests(unittest.TestCase):
         # Catches incorporating run-attempt, time, filesystem order, or randomness.
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            common, private, common_names, private_names = self.make_sources(base, 2, 70)
+            common, private, _, _ = self.make_sources(base, 2, 70)
             first = base / "first"
             second = base / "second"
             first.mkdir()
@@ -136,10 +151,113 @@ class MaterializeWindowTests(unittest.TestCase):
             names_second = sorted(path.name for path in second.iterdir())
             self.assertEqual(result_first, result_second)
             self.assertEqual(names_first, names_second)
-            self.assertEqual(result_first[3], 2)  # (7 * 5 + 3) % 4
+            self.assertEqual(len(result_first), 10)
+            self.assertRegex(result_first[8] or "", r"^[0-9a-f]{2}$")
+            self.assertLessEqual(len(names_first), materialize_window.WINDOW_SIZE)
+
+    def test_inventory_can_exceed_bucket_cap_when_each_prefix_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            common, private, _, _ = self.make_sources(base, 1, 0)
+            for prefix in ("00", "01", "02"):
+                for index in range(2):
+                    add_unit_with_prefix(private, prefix, f"{prefix}-{index}")
+            destination = base / "destination"
+            destination.mkdir()
+            with mock.patch.object(materialize_window, "MAX_TOTAL_FILES", 8), mock.patch.object(
+                materialize_window, "MAX_BUCKET_FILES", 2
+            ):
+                result = self.call(destination, 0, 1, 0, common, private)
+            self.assertEqual(result[8], "00")
+            self.assertEqual(result[6], 2)
+
+    def test_separate_shards_choose_separate_sorted_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            common, private, _, _ = self.make_sources(base, 1, 0)
+            for prefix in ("20", "a0", "f0"):
+                add_unit_with_prefix(private, prefix, prefix)
+            prefixes = []
+            for shard in range(3):
+                destination = base / f"destination-{shard}"
+                destination.mkdir()
+                prefixes.append(self.call(destination, shard, 3, 0, common, private)[8])
+            self.assertEqual(prefixes, ["20", "a0", "f0"])
+
+    def test_hash_mismatch_in_unselected_prefix_is_deferred_until_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            common, private, _, _ = self.make_sources(base, 1, 0)
+            add_unit_with_prefix(private, "00", "valid")
+            corrupt_name = add_unit_with_prefix(private, "ff", "corrupt-name")
+            (private / corrupt_name).write_bytes(b"content-does-not-match-name")
+
+            first = base / "first"
+            first.mkdir()
+            self.assertEqual(self.call(first, 0, 2, 0, common, private)[8], "00")
+
+            second = base / "second"
+            second.mkdir()
+            with self.assertRaises(materialize_window.FailClosed) as caught:
+                self.call(second, 1, 2, 0, common, private)
+            self.assertEqual(caught.exception.code, "content_hash")
+            self.assertEqual(list(second.iterdir()), [])
+
+    def test_inventory_and_selected_bucket_caps_have_distinct_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            common, private, _, _ = self.make_sources(base, 1, 0)
+            for index in range(3):
+                add_unit_with_prefix(private, "ab", f"ab-{index}")
+
+            destination = base / "inventory-cap"
+            destination.mkdir()
+            with mock.patch.object(materialize_window, "MAX_TOTAL_FILES", 2):
+                with self.assertRaises(materialize_window.FailClosed) as caught:
+                    self.call(destination, 0, 1, 0, common, private)
+            self.assertEqual(caught.exception.code, "file_count_cap")
+
+            destination = base / "bucket-cap"
+            destination.mkdir()
+            with mock.patch.object(materialize_window, "MAX_TOTAL_FILES", 10), mock.patch.object(
+                materialize_window, "MAX_BUCKET_FILES", 2
+            ):
+                with self.assertRaises(materialize_window.FailClosed) as caught:
+                    self.call(destination, 0, 1, 0, common, private)
+            self.assertEqual(caught.exception.code, "bucket_cap")
+
+    def test_large_bucket_visit_wraps_by_its_local_window_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            common, private, _, _ = self.make_sources(base, 1, 0)
+            for index in range(5):
+                add_unit_with_prefix(private, "7e", f"7e-{index}")
+            destination = base / "destination"
+            destination.mkdir()
+            with mock.patch.object(materialize_window, "WINDOW_SIZE", 3):
+                result = self.call(destination, 0, 1, 4, common, private)
+            self.assertEqual(result[8:], ("7e", 4))
+            self.assertEqual(result[4], 3)
+            self.assertEqual(result[3], 1)
+
+    def test_nonzero_wave_selects_exact_prefix_visit_and_local_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            common, private, common_names, _ = self.make_sources(base, 1, 0)
+            prefix_10 = sorted(
+                add_unit_with_prefix(private, "10", f"ten-{index}") for index in range(5)
+            )
+            for index in range(5):
+                add_unit_with_prefix(private, "20", f"twenty-{index}")
+            destination = base / "destination"
+            destination.mkdir()
+            with mock.patch.object(materialize_window, "WINDOW_SIZE", 3):
+                result = self.call(destination, 1, 3, 1, common, private)
+            self.assertEqual(result[8:], ("10", 2))
+            self.assertEqual((result[3], result[4]), (2, 3))
             self.assertEqual(
-                names_first,
-                sorted(common_names + private_names[44:66]),
+                sorted(path.name for path in destination.iterdir()),
+                sorted(common_names + prefix_10[4:5]),
             )
 
 

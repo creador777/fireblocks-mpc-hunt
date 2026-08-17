@@ -234,7 +234,24 @@ check "8c al reintentar, consolida" $?
 pool_paths "${B}" | grep -q '^corpus/cmp_ecdsa_online_r4_tn/'
 check "8d la unidad llego al pool" $?
 
-# --- 9. leak scan de la salida publica -----------------------------------
+# --- 9. pool historico invalido bloquea commit y push --------------------
+B="$(new_brain c9)"
+mkdir -p "${B}/seed/corpus"
+printf 'synthetic invalid harness root\n' > \
+    "${B}/seed/corpus/cmp_ecdsa_online_dual"
+HOME="${B}/home" git -C "${B}/seed" add -- corpus/cmp_ecdsa_online_dual
+HOME="${B}/home" git -C "${B}/seed" commit -q --no-gpg-sign -m malformed-root
+HOME="${B}/home" git -C "${B}/seed" push -q "${B}/pool.git" \
+    corpus-pool:refs/heads/corpus-pool
+publish "${B}" cmp_r4_tn 900 1 0 iota
+before="$(pool_head "${B}")"
+aggregate "${B}" 900 1 1
+[[ "$?" -ne 0 && "$(pool_head "${B}")" == "${before}" ]]
+check "9a pool invalido: aggregate falla y HEAD no avanza" $?
+ingest_refs "${B}" | grep -q 'cmp_ecdsa_online_r4_tn'
+check "9b la rama valida queda recuperable" $?
+
+# --- 10. leak scan de la salida publica ----------------------------------
 # Se excluye la ruta del banco: existe porque el remoto de ESTE test es
 # file://, y en produccion es una URL. Lo que se busca es contenido privado.
 leaks=0
@@ -246,7 +263,7 @@ for log in "${WORK}"/*/public.out; do
     fi
 done
 [[ "${leaks}" -eq 0 ]]
-check "9a ningun marcador prohibido en la salida" $? "logs=${leaks}"
+check "10a ningun marcador prohibido en la salida" $? "logs=${leaks}"
 
 printf 'BRAIN_E2E %s checks=%d failures=%d\n' \
     "$([[ "${FAIL}" -eq 0 ]] && echo PASS || echo FAIL)" \
